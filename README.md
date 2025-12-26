@@ -2,6 +2,30 @@
 
 Sistema di generazione automatica di applicazioni ERP utilizzando AI (Claude) per creare applicazioni Next.js complete e deployabili su Vercel.
 
+## 🔐 Protezione Password
+
+L'applicazione è protetta da Basic Authentication:
+
+- **Username**: `demo`
+- **Password**: `demo2025`
+
+Quando accedi all'applicazione, il browser ti chiederà di inserire queste credenziali.
+
+### Cambiare le Credenziali
+
+Per modificare username e password, edita il file `middleware.ts` nella root del progetto:
+
+```typescript
+// Cambia queste righe nel middleware.ts
+if (username === 'demo' && password === 'demo2025') {
+  return NextResponse.next();
+}
+```
+
+Sostituisci `'demo'` e `'demo2025'` con le credenziali desiderate.
+
+**Nota**: Le API routes (`/api/*`) sono esenti dalla protezione per permettere il funzionamento dell'applicazione.
+
 ## 🚀 Funzionalità
 
 - **Generazione AI**: Crea applicazioni ERP complete usando prompt in linguaggio naturale
