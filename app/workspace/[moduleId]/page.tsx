@@ -234,7 +234,7 @@ export default function WorkspaceModulePage() {
            currentVersion.dev_deploy_url || undefined;
   };
 
-  const tabs: { id: Tab; label: string; icon: JSX.Element }[] = [
+  const tabs: { id: Tab; label: string; icon: React.ReactElement }[] = [
     {
       id: 'editor',
       label: 'Editor AI',
