@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
-import { Octokit } from '@octokit/rest';
 import { randomUUID } from 'crypto';
-
-// Import dinamico di esbuild per evitare problemi con Next.js bundling
-let esbuild: typeof import('esbuild') | null = null;
-async function getEsbuild() {
-  if (!esbuild) {
-    esbuild = await import('esbuild');
-  }
-  return esbuild;
-}
+import { parseClaudeResponse, validateAndFixCode, getBaseFiles, getSafeTemplate } from '@/lib/code-generation';
+import { createAndPushGitHubRepo, createVercelDeployment } from '@/lib/github-deploy';
 
 // Inizializza Supabase client
 function getSupabaseClient() {
@@ -1913,7 +1905,7 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
       .join('\n');
     console.log('[GENERATE] Contenuto estratto, length:', responseText.length);
 
-    // Parsea i file dalla risposta
+    // Parsea i file dalla risposta (usa funzione condivisa)
     console.log('[GENERATE] Parsing file dalla risposta...');
     const claudeFiles = parseClaudeResponse(responseText);
     console.log('[GENERATE] File parsati da Claude:', Object.keys(claudeFiles).length, 'file:', Object.keys(claudeFiles));
@@ -1948,7 +1940,7 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
     const validatedFiles = validated.files;
     console.log('[GENERATE] File validati/finali:', Object.keys(validatedFiles).length);
 
-    // Aggiungi file base necessari per Next.js
+    // Aggiungi file base necessari per Next.js (usa funzione condivisa)
     console.log('[GENERATE] Aggiunta file base standard...');
     const baseFiles = getBaseFiles();
     // Combina file base + file generati (i file generati hanno priorità se ci sono conflitti)
@@ -2003,7 +1995,7 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
     }
     console.log('[GENERATE] Dati salvati in Supabase con successo');
 
-    // Crea repo GitHub e pusha file
+    // Crea repo GitHub e pusha file (usa funzioni condivise)
     let repoUrl: string | undefined;
     let deployUrl: string | undefined;
     
@@ -2014,7 +2006,7 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
       const repoName = `erp-app-${appId.substring(0, 8)}`;
       console.log('[GENERATE] Repo GitHub creato:', repoUrl);
       
-      // Crea deployment su Vercel usando l'API
+      // Crea deployment su Vercel usando l'API (usa funzione condivisa)
       try {
         console.log('[GENERATE] Creazione deployment Vercel...');
         const vercelDeployUrl = await createVercelDeployment(repoName, repoUrl, appId);

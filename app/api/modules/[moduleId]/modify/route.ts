@@ -1,16 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
-import { Octokit } from '@octokit/rest';
-
-// Import dinamico di esbuild
-let esbuild: typeof import('esbuild') | null = null;
-async function getEsbuild() {
-  if (!esbuild) {
-    esbuild = await import('esbuild');
-  }
-  return esbuild;
-}
+import { validateAndFixCode, getBaseFiles } from '@/lib/code-generation';
+import { createAndPushGitHubRepo, createVercelDeployment } from '@/lib/github-deploy';
 
 function getSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -19,14 +11,6 @@ function getSupabaseClient() {
     throw new Error('Supabase credentials not configured');
   }
   return createClient(supabaseUrl, supabaseKey);
-}
-
-function getGitHubClient() {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    throw new Error('GITHUB_TOKEN not configured');
-  }
-  return new Octokit({ auth: token });
 }
 
 // Tipi per context-aware prompt
@@ -181,285 +165,10 @@ function parseClaudeResponse(response: string): {
   return result;
 }
 
-// Valida e fix codice (riutilizza logica)
-async function validateAndFixCode(
-  files: Record<string, string>,
-  originalPrompt: string,
-  anthropic: Anthropic,
-  attempt: number = 1
-): Promise<{ success: boolean; files: Record<string, string>; errors?: Array<{ file: string; message: string }> }> {
-  const errors = await validateSyntax(files);
-  
-  if (errors.length === 0) {
-    return { success: true, files };
-  }
-  
-  if (attempt >= 3) {
-    return { success: false, files, errors };
-  }
-  
-  const fixPrompt = `CRITICAL INSTRUCTIONS - READ CAREFULLY:
-1. You MUST generate COMPLETE, COMPILABLE code
-2. NEVER leave code incomplete or with placeholders
-3. ALL type definitions must be complete
-4. ALL JSX tags must be properly closed
-5. ALL functions must have complete implementations
+// validateAndFixCode è importato da @/lib/code-generation
 
-Il codice precedente aveva questi errori:
-${errors.map(e => `- ${e.file}: ${e.message}`).join('\n')}
-
-Prompt originale: ${originalPrompt}
-
-RIGENERA il codice COMPLETO fixando questi errori.
-Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
-
-  try {
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
-      messages: [{ role: 'user', content: fixPrompt }],
-    });
-
-    const responseText = message.content
-      .map((block) => (block.type === 'text' ? block.text : ''))
-      .join('\n');
-
-    const parsedResponse = parseClaudeResponse(responseText);
-    return validateAndFixCode(parsedResponse.files, originalPrompt, anthropic, attempt + 1);
-  } catch (error) {
-    return { success: false, files, errors };
-  }
-}
-
-// Crea deployment (semplificato)
-async function createDeployment(
-  moduleId: string,
-  files: Record<string, string>,
-  moduleName: string
-): Promise<{ repoUrl: string; deployUrl: string }> {
-  const octokit = getGitHubClient();
-  const repoName = `erp-module-${moduleId.substring(0, 8)}`;
-  
-  const { data: userData } = await octokit.users.getAuthenticated();
-  const username = userData.login;
-
-  // Crea o ottieni repository
-  let repo;
-  try {
-    const createRepoResponse = await octokit.repos.createForAuthenticatedUser({
-      name: repoName,
-      private: true,
-      auto_init: true,
-      description: `ERP module: ${moduleName}`,
-    });
-    repo = createRepoResponse.data;
-  } catch (error: any) {
-    if (error.status === 422) {
-      const { data: existingRepo } = await octokit.repos.get({
-        owner: username,
-        repo: repoName,
-      });
-      repo = existingRepo;
-    } else {
-      throw error;
-    }
-  }
-
-  // Base files
-  const baseFiles = {
-    'package.json': JSON.stringify({
-      name: repoName,
-      version: '0.1.0',
-      private: true,
-      scripts: { dev: 'next dev', build: 'next build', start: 'next start' },
-      dependencies: {
-        next: '^15.1.9',
-        react: '^19.0.0',
-        'react-dom': '^19.0.0',
-        '@supabase/supabase-js': '^2.89.0',
-        'framer-motion': '^12.23.26',
-      },
-      devDependencies: {
-        '@types/node': '^20',
-        '@types/react': '^19',
-        '@types/react-dom': '^19',
-        typescript: '^5',
-        tailwindcss: '^4',
-        '@tailwindcss/postcss': '^4',
-        eslint: '^9',
-        'eslint-config-next': '^15.1.9',
-      },
-    }, null, 2),
-    'tsconfig.json': JSON.stringify({
-      compilerOptions: {
-        target: 'ES2017',
-        lib: ['dom', 'dom.iterable', 'esnext'],
-        allowJs: true,
-        skipLibCheck: true,
-        strict: true,
-        noEmit: true,
-        esModuleInterop: true,
-        module: 'esnext',
-        moduleResolution: 'bundler',
-        resolveJsonModule: true,
-        isolatedModules: true,
-        jsx: 'react-jsx',
-        incremental: true,
-        plugins: [{ name: 'next' }],
-        paths: { '@/*': ['./*'] },
-      },
-      include: ['next-env.d.ts', '**/*.ts', '**/*.tsx'],
-      exclude: ['node_modules'],
-    }, null, 2),
-    'next.config.js': `const nextConfig = {}; module.exports = nextConfig;`,
-    'tailwind.config.ts': `import type { Config } from "tailwindcss";
-const config: Config = { content: ["./app/**/*.{js,ts,jsx,tsx,mdx}", "./components/**/*.{js,ts,jsx,tsx,mdx}"], theme: { extend: {} }, plugins: [] };
-export default config;`,
-    'postcss.config.js': `module.exports = { plugins: { '@tailwindcss/postcss': {} } };`,
-    '.gitignore': `node_modules\n.next\nout\n.env*.local\n.vercel`,
-    'app/layout.tsx': `export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="it"><body>{children}</body></html>;
-}`,
-    'app/globals.css': `@tailwind base; @tailwind components; @tailwind utilities;`,
-  };
-
-  const allFiles = { ...baseFiles, ...files };
-  const branchName = repo.default_branch || 'main';
-  
-  const { data: refData } = await octokit.git.getRef({
-    owner: username,
-    repo: repoName,
-    ref: `heads/${branchName}`,
-  });
-
-  const { data: commitData } = await octokit.git.getCommit({
-    owner: username,
-    repo: repoName,
-    commit_sha: refData.object.sha,
-  });
-
-  const blobShas: Record<string, string> = {};
-  for (const [path, content] of Object.entries(allFiles)) {
-    const { data: blobData } = await octokit.git.createBlob({
-      owner: username,
-      repo: repoName,
-      content: Buffer.from(content as string).toString('base64'),
-      encoding: 'base64',
-    });
-    blobShas[path] = blobData.sha;
-  }
-
-  const { data: treeData } = await octokit.git.createTree({
-    owner: username,
-    repo: repoName,
-    base_tree: commitData.tree.sha,
-    tree: Object.entries(allFiles).map(([path]) => ({
-      path,
-      mode: '100644' as const,
-      type: 'blob' as const,
-      sha: blobShas[path],
-    })),
-  });
-
-  const { data: commitResponse } = await octokit.git.createCommit({
-    owner: username,
-    repo: repoName,
-    message: `Update module: ${moduleName}`,
-    tree: treeData.sha,
-    parents: [refData.object.sha],
-  });
-
-  await octokit.git.updateRef({
-    owner: username,
-    repo: repoName,
-    ref: `heads/${branchName}`,
-    sha: commitResponse.sha,
-  });
-
-  const repoUrl = repo.html_url;
-  const deployUrl = `https://${repoName}.vercel.app`;
-
-  // Deploy Vercel (semplificato)
-  const vercelToken = process.env.VERCEL_TOKEN;
-  if (vercelToken) {
-    try {
-      const { data: repoData } = await octokit.rest.repos.get({
-        owner: username,
-        repo: repoName,
-      });
-      const repoId = repoData.id;
-
-      const projectResponse = await fetch('https://api.vercel.com/v9/projects', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${vercelToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: repoName,
-          framework: 'nextjs',
-          gitRepository: { type: 'github', repo: `${username}/${repoName}`, repoId },
-          environmentVariables: [
-            {
-              key: 'NEXT_PUBLIC_SUPABASE_URL',
-              value: process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-              type: 'plain',
-              target: ['production', 'preview', 'development'],
-            },
-            {
-              key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-              value: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-              type: 'plain',
-              target: ['production', 'preview', 'development'],
-            },
-          ],
-        }),
-      });
-
-      if (projectResponse.ok) {
-        await fetch('https://api.vercel.com/v13/deployments', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${vercelToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: repoName,
-            project: (await projectResponse.json()).id,
-            target: 'production',
-            gitSource: { type: 'github', repoId, ref: 'main' },
-          }),
-        });
-      }
-    } catch (error) {
-      console.warn('[MODIFY] Errore deploy Vercel:', error);
-    }
-  }
-
-  return { repoUrl, deployUrl };
-}
-
-// Valida sintassi
-async function validateSyntax(files: Record<string, string>): Promise<Array<{ file: string; message: string }>> {
-  const errors: Array<{ file: string; message: string }> = [];
-  const esbuildModule = await getEsbuild();
-  
-  for (const [filePath, content] of Object.entries(files)) {
-    if (!filePath.endsWith('.tsx') && !filePath.endsWith('.ts')) continue;
-    try {
-      await esbuildModule.transform(content, {
-        loader: 'tsx',
-        target: 'es2020',
-      });
-    } catch (error: any) {
-      errors.push({
-        file: filePath,
-        message: error.message || 'Errore di sintassi',
-      });
-    }
-  }
-  return errors;
-}
+// createAndPushGitHubRepo e createVercelDeployment sono importati da @/lib/github-deploy
+// validateAndFixCode è importato da @/lib/code-generation
 
 // POST - Modifica modulo con AI
 export async function POST(
@@ -657,19 +366,15 @@ Rispetta le relazioni tra moduli e le foreign key esistenti.`;
       }
     }
     
-    const errors = await validateSyntax(modifiedFilesForValidation);
-    if (errors.length > 0) {
-      console.warn('[MODIFY] Errori di sintassi trovati:', errors);
-      // Prova auto-fix
-      const fixed = await validateAndFixCode(modifiedFilesForValidation, prompt, anthropic);
-      if (fixed.success) {
-        // Applica fix
-        for (const [path, content] of Object.entries(fixed.files)) {
-          files[path] = content;
-        }
-      } else {
-        console.warn('[MODIFY] Auto-fix fallito, continua comunque');
+    // Usa validateAndFixCode dalla libreria condivisa
+    const validated = await validateAndFixCode(modifiedFilesForValidation, prompt, anthropic, 1);
+    if (validated.success) {
+      // Applica fix
+      for (const [path, content] of Object.entries(validated.files)) {
+        files[path] = content;
       }
+    } else {
+      console.warn('[MODIFY] Validazione fallita, continua comunque');
     }
 
     // Determina numero versione
@@ -734,7 +439,13 @@ Rispetta le relazioni tra moduli e le foreign key esistenti.`;
     console.log('[MODIFY] Deploy su DEV...');
     let devUrl: string | undefined;
     try {
-      const { repoUrl, deployUrl } = await createDeployment(moduleId, files, module.name);
+      // Aggiungi file base
+      const baseFiles = getBaseFiles();
+      const allFiles = { ...baseFiles, ...files };
+      
+      const repoName = `erp-module-${moduleId.substring(0, 8)}`;
+      const { repoUrl } = await createAndPushGitHubRepo(moduleId, allFiles, module.name);
+      const deployUrl = await createVercelDeployment(repoName, repoUrl, moduleId);
       devUrl = deployUrl;
       
       // Aggiorna versione con deploy URL

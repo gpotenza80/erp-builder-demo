@@ -1,0 +1,510 @@
+import { Octokit } from '@octokit/rest';
+import { getBaseFiles } from './code-generation';
+
+// Inizializza GitHub client
+export function getGitHubClient() {
+  const githubToken = process.env.GITHUB_TOKEN;
+  
+  if (!githubToken) {
+    throw new Error('GITHUB_TOKEN non configurato');
+  }
+
+  return new Octokit({
+    auth: githubToken,
+  });
+}
+
+// Funzione con retry logic per operazioni GitHub
+export async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  delay: number = 1000,
+  operationName: string = 'Operation'
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[RETRY] ${operationName} - Tentativo ${attempt}/${maxRetries}`);
+      return await operation();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn(`[RETRY] ${operationName} - Tentativo ${attempt} fallito:`, lastError.message);
+      
+      if (attempt < maxRetries) {
+        const waitTime = delay * attempt; // Exponential backoff
+        console.log(`[RETRY] Attesa ${waitTime}ms prima del prossimo tentativo...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+    }
+  }
+  
+  throw lastError || new Error(`${operationName} fallito dopo ${maxRetries} tentativi`);
+}
+
+// Crea e pusha repo GitHub con timeout e retry
+export async function createAndPushGitHubRepo(
+  appId: string,
+  files: Record<string, string>,
+  prompt: string
+): Promise<{ repoUrl: string; deployUrl: string }> {
+  console.log('[GITHUB] Inizio creazione repo GitHub...');
+  
+  const octokit = getGitHubClient();
+  const repoName = `erp-app-${appId.substring(0, 8)}`;
+  
+  // Timeout di 2 minuti per l'intera operazione GitHub
+  const githubTimeout = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error('Timeout: operazione GitHub superata 2 minuti'));
+    }, 120000);
+  });
+
+  return Promise.race([
+    (async () => {
+      // Ottieni username GitHub
+      const username = await withRetry(
+        async () => {
+          const { data: userData } = await octokit.users.getAuthenticated();
+          return userData.login;
+        },
+        3,
+        1000,
+        'getGitHubUsername'
+      );
+      console.log('[GITHUB] Username:', username);
+
+      // Crea repository
+      let repo;
+      try {
+        repo = await withRetry(
+          async () => {
+            const createRepoResponse = await octokit.repos.createForAuthenticatedUser({
+              name: repoName,
+              private: true,
+              auto_init: true,
+              description: `ERP app generata: ${prompt.substring(0, 100) || 'Generated app'}`,
+            });
+            return createRepoResponse.data;
+          },
+          3,
+          2000,
+          'createRepository'
+        );
+        console.log('[GITHUB] Repository creata:', repo.html_url);
+      } catch (error: any) {
+        if (error.status === 422 && (error.message?.includes('already exists') || error.message?.includes('name already exists'))) {
+          console.log('[GITHUB] Repository già esistente, recupero...');
+          repo = await withRetry(
+            async () => {
+              const { data: existingRepo } = await octokit.repos.get({
+                owner: username,
+                repo: repoName,
+              });
+              return existingRepo;
+            },
+            3,
+            1000,
+            'getExistingRepository'
+          );
+          console.log('[GITHUB] Repository esistente recuperata:', repo.html_url);
+        } else {
+          throw error;
+        }
+      }
+
+      // Prepara file
+      const baseFiles = getBaseFiles();
+      const allFiles = { ...baseFiles, ...files };
+      console.log('[GITHUB] File totali da pushare:', Object.keys(allFiles).length);
+
+      // Ottieni SHA branch
+      const branchSha = await withRetry(
+        async () => {
+          try {
+            const { data: refData } = await octokit.git.getRef({
+              owner: repo.owner.login,
+              repo: repo.name,
+              ref: 'heads/main',
+            });
+            return refData.object.sha;
+          } catch (error: any) {
+            const { data: refData } = await octokit.git.getRef({
+              owner: repo.owner.login,
+              repo: repo.name,
+              ref: 'heads/master',
+            });
+            return refData.object.sha;
+          }
+        },
+        3,
+        1000,
+        'getBranchSha'
+      );
+      console.log('[GITHUB] Branch SHA:', branchSha);
+
+      // Ottieni tree commit
+      const baseTreeSha = await withRetry(
+        async () => {
+          const { data: commitData } = await octokit.git.getCommit({
+            owner: repo.owner.login,
+            repo: repo.name,
+            commit_sha: branchSha,
+          });
+          return commitData.tree.sha;
+        },
+        3,
+        1000,
+        'getBaseTreeSha'
+      );
+      console.log('[GITHUB] Base tree SHA:', baseTreeSha);
+
+      // Crea blobs
+      const blobShas: Record<string, string> = {};
+      for (const [path, content] of Object.entries(allFiles)) {
+        const blobSha = await withRetry(
+          async () => {
+            const { data: blobData } = await octokit.git.createBlob({
+              owner: repo.owner.login,
+              repo: repo.name,
+              content: Buffer.from(content).toString('base64'),
+              encoding: 'base64',
+            });
+            return blobData.sha;
+          },
+          2,
+          500,
+          `createBlob-${path}`
+        );
+        blobShas[path] = blobSha;
+      }
+      console.log('[GITHUB] Blobs creati:', Object.keys(blobShas).length);
+
+      // Crea tree
+      const treeSha = await withRetry(
+        async () => {
+          const { data: treeData } = await octokit.git.createTree({
+            owner: repo.owner.login,
+            repo: repo.name,
+            base_tree: baseTreeSha,
+            tree: Object.entries(allFiles).map(([path, _]) => ({
+              path,
+              mode: '100644' as const,
+              type: 'blob' as const,
+              sha: blobShas[path],
+            })),
+          });
+          return treeData.sha;
+        },
+        3,
+        1000,
+        'createTree'
+      );
+      console.log('[GITHUB] Tree creato:', treeSha);
+
+      // Crea commit
+      const commitSha = await withRetry(
+        async () => {
+          const { data: commitResponse } = await octokit.git.createCommit({
+            owner: repo.owner.login,
+            repo: repo.name,
+            message: 'Initial commit: Generated ERP app',
+            tree: treeSha,
+            parents: [branchSha],
+          });
+          return commitResponse.sha;
+        },
+        3,
+        1000,
+        'createCommit'
+      );
+      console.log('[GITHUB] Commit creato:', commitSha);
+
+      // Aggiorna reference
+      const branchName = repo.default_branch || 'main';
+      await withRetry(
+        async () => {
+          await octokit.git.updateRef({
+            owner: repo.owner.login,
+            repo: repo.name,
+            ref: `heads/${branchName}`,
+            sha: commitSha,
+          });
+        },
+        3,
+        1000,
+        'updateRef'
+      );
+      console.log('[GITHUB] Reference aggiornata');
+
+      const repoUrl = repo.html_url;
+      // Vercel genera automaticamente l'URL basandosi sul nome del repo
+      // Il deployment potrebbe richiedere alcuni minuti per essere disponibile
+      const deployUrl = `https://${repoName}.vercel.app`;
+
+      return { repoUrl, deployUrl };
+    })(),
+    githubTimeout,
+  ]);
+}
+
+// Crea progetto su Vercel usando l'API v9 e attende il deployment automatico
+export async function createVercelDeployment(
+  repoName: string,
+  repoUrl: string,
+  appId: string
+): Promise<string> {
+  console.log('[VERCEL] Inizio creazione progetto Vercel...');
+  
+  const vercelToken = process.env.VERCEL_TOKEN;
+  if (!vercelToken) {
+    console.warn('[VERCEL] ⚠️  VERCEL_TOKEN non configurato. Saltando deployment automatico.');
+    throw new Error('VERCEL_TOKEN non configurato');
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.warn('[VERCEL] ⚠️  Credenziali Supabase non configurate per le env vars.');
+  }
+
+  // Estrai owner e repo da repoUrl (es: https://github.com/gpotenza80/erp-app-xxx)
+  const repoMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+  if (!repoMatch) {
+    throw new Error(`Impossibile estrarre owner/repo da URL: ${repoUrl}`);
+  }
+  const [, owner, repo] = repoMatch;
+
+  console.log('[VERCEL] Owner:', owner, 'Repo:', repo);
+
+  // Timeout di 5 minuti per il deployment
+  const vercelTimeout = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error('Timeout: creazione deployment Vercel superata 5 minuti'));
+    }, 300000); // 5 minuti
+  });
+
+  return Promise.race([
+    (async () => {
+      // STEP 1: Crea il progetto usando API v9
+      console.log('[VERCEL] [STEP 1] Creazione progetto...');
+      
+      let projectId: string | null = null;
+      let lastError: Error | null = null;
+
+      // Retry logic per la creazione del progetto
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          console.log(`[VERCEL] [RETRY] Tentativo ${attempt}/3: creazione progetto...`);
+          
+          // Prepara il body della richiesta per creare il progetto
+          const projectBody: any = {
+            name: repoName,
+            framework: 'nextjs',
+            gitRepository: {
+              type: 'github',
+              repo: `${owner}/${repo}`,
+            },
+          };
+
+          // Aggiungi env vars se disponibili
+          if (supabaseUrl && supabaseAnonKey) {
+            projectBody.environmentVariables = [
+              {
+                key: 'NEXT_PUBLIC_SUPABASE_URL',
+                value: supabaseUrl,
+                type: 'plain',
+                target: ['production', 'preview', 'development'],
+              },
+              {
+                key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+                value: supabaseAnonKey,
+                type: 'plain',
+                target: ['production', 'preview', 'development'],
+              },
+            ];
+            console.log('[VERCEL] Env vars formattate:', projectBody.environmentVariables.length, 'variables');
+          }
+
+          const response = await fetch('https://api.vercel.com/v9/projects', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${vercelToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(projectBody),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[VERCEL] Errore HTTP ${response.status}:`, errorText);
+            throw new Error(`Vercel API error: ${response.status} - ${errorText}`);
+          }
+
+          const projectData = await response.json();
+          projectId = projectData.id;
+          console.log('[VERCEL] ✅ Progetto creato:', projectId);
+          console.log('[VERCEL] Project name:', projectData.name);
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          console.error(`[VERCEL] [RETRY] Tentativo ${attempt}/3 fallito:`, lastError.message);
+          
+          if (attempt < 3) {
+            const waitTime = attempt * 2000; // Backoff esponenziale: 2s, 4s
+            console.log(`[VERCEL] Attendo ${waitTime}ms prima di riprovare...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          }
+        }
+      }
+
+      if (!projectId) {
+        throw lastError || new Error('Impossibile creare progetto Vercel dopo 3 tentativi');
+      }
+
+      // STEP 2: Ottieni repoId da GitHub
+      console.log('[VERCEL] [STEP 2] Ottenimento repoId da GitHub...');
+      const octokit = getGitHubClient();
+      let repoId: number | null = null;
+      
+      try {
+        const repoData = await octokit.rest.repos.get({
+          owner: owner,
+          repo: repo,
+        });
+        repoId = repoData.data.id;
+        console.log('[VERCEL] Repo ID ottenuto:', repoId);
+      } catch (error) {
+        console.warn('[VERCEL] ⚠️  Impossibile ottenere repoId da GitHub:', error);
+        throw new Error('Impossibile ottenere repoId da GitHub per triggerare deployment');
+      }
+
+      // STEP 3: Triggera manualmente un deployment
+      console.log('[VERCEL] [STEP 3] Trigger deployment manuale...');
+      
+      let deploymentId: string | null = null;
+      lastError = null;
+
+      // Retry logic per il trigger del deployment
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          console.log(`[VERCEL] [RETRY] Tentativo ${attempt}/3: trigger deployment...`);
+          
+          const deploymentBody = {
+            name: repoName,
+            project: projectId,
+            target: 'production',
+            gitSource: {
+              type: 'github',
+              repoId: repoId,
+              ref: 'main',
+            },
+          };
+
+          const deploymentResponse = await fetch('https://api.vercel.com/v13/deployments', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${vercelToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(deploymentBody),
+          });
+
+          if (!deploymentResponse.ok) {
+            const errorText = await deploymentResponse.text();
+            console.error(`[VERCEL] Errore HTTP ${deploymentResponse.status}:`, errorText);
+            throw new Error(`Vercel API error: ${deploymentResponse.status} - ${errorText}`);
+          }
+
+          const deploymentData = await deploymentResponse.json();
+          deploymentId = deploymentData.id;
+          console.log('[VERCEL] Deployment triggerato:', deploymentId);
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          console.error(`[VERCEL] [RETRY] Tentativo ${attempt}/3 fallito:`, lastError.message);
+          
+          if (attempt < 3) {
+            const waitTime = attempt * 2000; // Backoff esponenziale: 2s, 4s
+            console.log(`[VERCEL] Attendo ${waitTime}ms prima di riprovare...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          }
+        }
+      }
+
+      if (!deploymentId) {
+        throw lastError || new Error('Impossibile triggerare deployment Vercel dopo 3 tentativi');
+      }
+
+      // STEP 4: Polling dello stato del deployment specifico
+      console.log('[VERCEL] [STEP 4] Polling stato deployment...');
+      
+      let deploymentUrl: string | null = null;
+      const maxPollingAttempts = 30; // 30 tentativi * 10 secondi = 5 minuti max
+      const pollingInterval = 10000; // 10 secondi
+
+      for (let pollingAttempt = 1; pollingAttempt <= maxPollingAttempts; pollingAttempt++) {
+        try {
+          console.log(`[VERCEL] [POLLING] Tentativo ${pollingAttempt}/${maxPollingAttempts}: verifica stato deployment ${deploymentId}...`);
+          
+          // Query GET /v13/deployments/{deploymentId}
+          const deploymentStatusResponse = await fetch(`https://api.vercel.com/v13/deployments/${deploymentId}`, {
+            headers: {
+              'Authorization': `Bearer ${vercelToken}`,
+            },
+          });
+
+          if (!deploymentStatusResponse.ok) {
+            console.warn(`[VERCEL] Errore HTTP ${deploymentStatusResponse.status} durante polling`);
+            // Continua il polling
+            await new Promise(resolve => setTimeout(resolve, pollingInterval));
+            continue;
+          }
+
+          const deploymentStatus = await deploymentStatusResponse.json();
+          const readyState = deploymentStatus.readyState;
+          
+          console.log(`[VERCEL] Deployment state: ${readyState || 'UNKNOWN'}`);
+
+          if (readyState === 'READY') {
+            // Usa sempre l'URL del progetto (pubblico) invece dell'URL del deployment (può essere privato)
+            // L'URL del progetto è sempre: https://{projectName}.vercel.app
+            deploymentUrl = `https://${repoName}.vercel.app`;
+            
+            console.log('[VERCEL] ✅ Deployment READY!');
+            console.log('[VERCEL] Deployment ID:', deploymentId);
+            console.log('[VERCEL] Project URL:', deploymentUrl);
+            break;
+          }
+
+          if (readyState === 'ERROR') {
+            console.error('[VERCEL] ❌ Deployment fallito!');
+            throw new Error('Deployment fallito su Vercel');
+          }
+
+          // Attendi prima del prossimo polling
+          if (pollingAttempt < maxPollingAttempts) {
+            await new Promise(resolve => setTimeout(resolve, pollingInterval));
+          }
+        } catch (error) {
+          console.error(`[VERCEL] Errore durante polling (tentativo ${pollingAttempt}):`, error);
+          // Continua il polling se non è un errore fatale
+          if (pollingAttempt < maxPollingAttempts) {
+            await new Promise(resolve => setTimeout(resolve, pollingInterval));
+          }
+        }
+      }
+
+      if (!deploymentUrl) {
+        // Fallback: usa il nome del progetto
+        deploymentUrl = `https://${repoName}.vercel.app`;
+        console.warn('[VERCEL] ⚠️  Deployment URL non ottenuto dal polling, usando URL generico:', deploymentUrl);
+      }
+
+      return deploymentUrl;
+    })(),
+    vercelTimeout,
+  ]);
+}
+
