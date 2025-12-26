@@ -28,32 +28,52 @@ export default function WorkspacePage() {
   }, [moduleId]);
 
   async function loadModule() {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    // Carica modulo
-    const { data: moduleData } = await supabase
-      .from('modules')
-      .select('*')
-      .eq('id', moduleId)
-      .single();
+      if (!supabaseUrl || !supabaseKey) {
+        console.error('[Workspace] Variabili Supabase non configurate');
+        setLoading(false);
+        return;
+      }
 
-    setModule(moduleData);
+      const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Carica versione DEV se esiste
-    if (moduleData?.dev_version_id) {
-      const { data: versionData } = await supabase
-        .from('module_versions')
+      // Carica modulo
+      const { data: moduleData, error: moduleError } = await supabase
+        .from('modules')
         .select('*')
-        .eq('id', moduleData.dev_version_id)
+        .eq('id', moduleId)
         .single();
 
-      setDevVersion(versionData);
-    }
+      if (moduleError) {
+        console.error('[Workspace] Errore caricamento modulo:', moduleError);
+        setLoading(false);
+        return;
+      }
 
-    setLoading(false);
+      setModule(moduleData);
+
+      // Carica versione DEV se esiste
+      if (moduleData?.dev_version_id) {
+        const { data: versionData, error: versionError } = await supabase
+          .from('module_versions')
+          .select('*')
+          .eq('id', moduleData.dev_version_id)
+          .single();
+
+        if (versionError) {
+          console.error('[Workspace] Errore caricamento versione:', versionError);
+        } else {
+          setDevVersion(versionData);
+        }
+      }
+    } catch (error) {
+      console.error('[Workspace] Errore:', error);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const tabs: { id: Tab; label: string; icon: string }[] = [

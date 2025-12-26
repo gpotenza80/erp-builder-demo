@@ -16,48 +16,68 @@ export default function DashboardPage() {
   }, []);
 
   async function loadWorkspaceAndModules() {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    );
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    // Carica workspace (per ora: primo workspace trovato)
-    const { data: workspaceData } = await supabase
-      .from('workspaces')
-      .select('*')
-      .limit(1)
-      .single();
+      if (!supabaseUrl || !supabaseKey) {
+        console.error('[Dashboard] Variabili Supabase non configurate');
+        setLoading(false);
+        return;
+      }
 
-    if (!workspaceData) {
-      // Crea workspace di default se non esiste
-      const { data: newWorkspace } = await supabase
+      const supabase = createClient(supabaseUrl, supabaseKey);
+
+      // Carica workspace (per ora: primo workspace trovato)
+      const { data: workspaceData, error: workspaceError } = await supabase
         .from('workspaces')
-        .insert({
-          user_id: 'default_user',
-          name: 'My ERP Workspace',
-          description: 'Il mio workspace ERP personalizzato'
-        })
-        .select()
-        .single();
-      
-      setWorkspace(newWorkspace);
-    } else {
-      setWorkspace(workspaceData);
-    }
-
-    // Carica moduli del workspace
-    if (workspaceData || workspace) {
-      const workspaceId = workspaceData?.id || workspace?.id;
-      const { data: modulesData } = await supabase
-        .from('modules')
         .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('created_at', { ascending: false });
+        .limit(1)
+        .maybeSingle();
 
-      setModules(modulesData || []);
+      let currentWorkspace = workspaceData;
+
+      if (!workspaceData && !workspaceError) {
+        // Crea workspace di default se non esiste
+        const { data: newWorkspace, error: createError } = await supabase
+          .from('workspaces')
+          .insert({
+            user_id: 'default_user',
+            name: 'My ERP Workspace',
+            description: 'Il mio workspace ERP personalizzato'
+          })
+          .select()
+          .single();
+        
+        if (createError) {
+          console.error('[Dashboard] Errore creazione workspace:', createError);
+        } else {
+          currentWorkspace = newWorkspace;
+        }
+      }
+
+      if (currentWorkspace) {
+        setWorkspace(currentWorkspace);
+
+        // Carica moduli del workspace
+        const { data: modulesData, error: modulesError } = await supabase
+          .from('modules')
+          .select('*')
+          .eq('workspace_id', currentWorkspace.id)
+          .order('created_at', { ascending: false });
+
+        if (modulesError) {
+          console.error('[Dashboard] Errore caricamento moduli:', modulesError);
+          setModules([]);
+        } else {
+          setModules(modulesData || []);
+        }
+      }
+    } catch (error) {
+      console.error('[Dashboard] Errore:', error);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
   function getEnvironmentBadge(module: Module) {
