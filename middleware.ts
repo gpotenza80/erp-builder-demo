@@ -7,7 +7,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check basic auth
+  // Disabilita Basic Auth in sviluppo locale (localhost)
+  if (process.env.NODE_ENV === 'development' || request.nextUrl.hostname === 'localhost') {
+    return NextResponse.next();
+  }
+
+  // Check basic auth (solo in produzione)
   const authHeader = request.headers.get('authorization');
   
   if (!authHeader || !authHeader.startsWith('Basic ')) {
