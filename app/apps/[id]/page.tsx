@@ -37,28 +37,35 @@ export default function AppDetailPage() {
   }, [appId]);
 
   useEffect(() => {
-    if (app?.deployUrl) {
-      // Quando viene creato un nuovo deployment, resetta lo stato
-      const startTime = Date.now();
-      setBuildStatus('building');
-      setShowIframe(false);
-      setDeploymentStartTime(startTime);
-      setDeploymentCheckAttempts(0);
+    if (app?.deployUrl && app?.created_at) {
+      const createdTime = new Date(app.created_at).getTime();
+      const now = Date.now();
+      const elapsed = now - createdTime;
+      
+      // Se l'app è stata creata più di 5 minuti fa, considera già deployata
+      if (elapsed > 300000) {
+        setBuildStatus('live');
+        setShowIframe(true);
+        return;
+      }
+      
+      // Se è stata creata da poco, imposta il timer di inizio
+      setDeploymentStartTime(createdTime);
       
       // Controlla periodicamente se il deployment è disponibile
       const checkDeployment = async () => {
-        const elapsed = Date.now() - startTime;
+        const currentElapsed = Date.now() - createdTime;
         setDeploymentCheckAttempts(prev => prev + 1);
         
         // Dopo 10 minuti, mostra un messaggio di errore
-        if (elapsed > 600000) {
+        if (currentElapsed > 600000) {
           setBuildStatus('error');
           clearInterval(checkInterval);
           return;
         }
         
         // Dopo 5 minuti, mostra comunque l'iframe (anche se potrebbe non essere pronto)
-        if (elapsed > 300000 && !showIframe) {
+        if (currentElapsed > 300000 && !showIframe) {
           setShowIframe(true);
           setBuildStatus('live');
         }
@@ -80,7 +87,7 @@ export default function AppDetailPage() {
         clearTimeout(autoShowTimeout);
       };
     }
-  }, [app?.deployUrl]);
+  }, [app?.deployUrl, app?.created_at, showIframe]);
 
   const loadApp = async () => {
     setIsLoading(true);
@@ -92,23 +99,33 @@ export default function AppDetailPage() {
       
       if (data.success && data.app) {
         setApp(data.app);
-        // Se l'app ha un deployUrl, mostra sempre l'iframe
-        if (data.app.deployUrl) {
-          setShowIframe(true); // Mostra sempre l'iframe se c'è un deployUrl
-          setBuildStatus('live');
+        // Se l'app ha un deployUrl, verifica quando è stata creata
+        if (data.app.deployUrl && data.app.created_at) {
+          const createdTime = new Date(data.app.created_at).getTime();
+          const now = Date.now();
+          const elapsed = now - createdTime;
           
-          if (data.app.created_at) {
-            const createdTime = new Date(data.app.created_at).getTime();
-            setDeploymentStartTime(createdTime);
-            
-            const now = Date.now();
-            const elapsed = now - createdTime;
-            
-            // Se sono passati più di 10 minuti dalla creazione, mostra lo stato di errore
-            if (elapsed > 600000) {
-              setBuildStatus('error');
-            }
+          // Se sono passati più di 5 minuti dalla creazione, considera già deployata
+          if (elapsed > 300000) {
+            setShowIframe(true);
+            setBuildStatus('live');
+          } else {
+            // Se è stata creata da poco, mostra come "building"
+            setShowIframe(false);
+            setBuildStatus('building');
           }
+          
+          setDeploymentStartTime(createdTime);
+          
+          // Se sono passati più di 10 minuti dalla creazione, mostra lo stato di errore
+          if (elapsed > 600000) {
+            setBuildStatus('error');
+            setShowIframe(true); // Mostra comunque l'iframe per permettere all'utente di vedere
+          }
+        } else if (data.app.deployUrl) {
+          // Se c'è deployUrl ma non created_at, mostra come live
+          setShowIframe(true);
+          setBuildStatus('live');
         }
       } else {
         setError(data.error || 'App non trovata');
@@ -367,8 +384,10 @@ export default function AppDetailPage() {
               <h2 className="text-xl font-bold text-gray-800">La Tua Applicazione</h2>
               {app.deployUrl && (
                 <div className="flex items-center gap-2">
-                  {buildStatus === 'building' ? (
+                  {buildStatus === 'building' && deploymentStartTime && (Date.now() - deploymentStartTime) < 300000 ? (
                     <span className="text-sm text-yellow-600 font-medium">⏳ Deployment in corso...</span>
+                  ) : buildStatus === 'error' ? (
+                    <span className="text-sm text-red-600 font-medium">❌ Deployment fallito</span>
                   ) : (
                     <span className="text-sm text-green-600 font-medium">✅ Applicazione Live!</span>
                   )}
