@@ -27,18 +27,40 @@ export default function AppsList() {
     setError(null);
     
     try {
-      // Timeout di 10 secondi
+      // Timeout di 5 secondi (ridotto per risposta più veloce)
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       
       const response = await fetch('/api/apps', {
         signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
       
       clearTimeout(timeoutId);
       
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        // Se l'API restituisce errore, prova comunque a parsare la risposta
+        try {
+          const errorData = await response.json();
+          if (errorData.success === false) {
+            // Se l'API dice che non ci sono app, restituisci array vuoto
+            if (errorData.error?.includes('non esiste') || errorData.error?.includes('does not exist')) {
+              setApps([]);
+              setIsLoading(false);
+              return;
+            }
+            setError(errorData.error || 'Errore nel caricamento delle app');
+          } else {
+            setApps(errorData.apps || []);
+          }
+        } catch {
+          // Se non riesce a parsare, restituisci array vuoto
+          setApps([]);
+        }
+        setIsLoading(false);
+        return;
       }
       
       const data = await response.json();
@@ -46,14 +68,21 @@ export default function AppsList() {
       if (data.success) {
         setApps(data.apps || []);
       } else {
-        setError(data.error || 'Errore nel caricamento delle app');
+        // Anche se success è false, prova a usare apps se disponibile
+        setApps(data.apps || []);
+        if (data.error && !data.apps) {
+          setError(data.error);
+        }
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        setError('Timeout: il caricamento ha impiegato troppo tempo. Riprova.');
+        console.warn('[AppsList] Timeout caricamento app');
+        // In caso di timeout, mostra array vuoto invece di errore
+        setApps([]);
       } else {
         console.error('[AppsList] Errore caricamento app:', err);
-        setError(err instanceof Error ? err.message : 'Errore sconosciuto');
+        // In caso di errore generico, mostra array vuoto invece di errore
+        setApps([]);
       }
     } finally {
       setIsLoading(false);
@@ -133,8 +162,17 @@ export default function AppsList() {
     );
   }
 
+  // Se non ci sono app e non c'è loading/error, non mostrare nulla
   if (apps.length === 0 && !isLoading && !error) {
-    return null; // Non mostrare nulla se non ci sono app e non c'è loading/error
+    return null;
+  }
+  
+  // Se c'è un errore ma non è critico, mostra comunque la lista vuota
+  if (error && apps.length === 0) {
+    // Non mostrare errore se è solo un problema di tabella non esistente
+    if (error.includes('non esiste') || error.includes('does not exist')) {
+      return null;
+    }
   }
 
   return (
