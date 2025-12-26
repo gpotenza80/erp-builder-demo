@@ -539,9 +539,7 @@ Rispetta le relazioni tra moduli e le foreign key esistenti.`;
         from_module_id,
         to_module_id,
         connection_type,
-        config,
-        modules_from:from_module_id(id, name, type),
-        modules_to:to_module_id(id, name, type)
+        config
       `)
       .or(`from_module_id.eq.${moduleId},to_module_id.eq.${moduleId}`);
 
@@ -550,11 +548,11 @@ Rispetta le relazioni tra moduli e le foreign key esistenti.`;
     if (connectedModules) {
       for (const conn of connectedModules) {
         const connectedModuleId = conn.from_module_id === moduleId 
-          ? conn.modules_to?.id 
-          : conn.modules_from?.id;
+          ? conn.to_module_id 
+          : conn.from_module_id;
         
-        if (connectedModuleId) {
-          // Carica versione corrente del modulo collegato per ottenere schema
+        if (connectedModuleId && connectedModuleId !== moduleId) {
+          // Carica dati del modulo collegato
           const { data: connectedModuleData } = await supabase
             .from('modules')
             .select('id, name, type, dev_version_id, staging_version_id, prod_version_id')
@@ -578,12 +576,8 @@ Rispetta le relazioni tra moduli e le foreign key esistenti.`;
 
             connectableModules.push({
               id: connectedModuleId,
-              name: conn.from_module_id === moduleId 
-                ? conn.modules_to?.name || 'Unknown'
-                : conn.modules_from?.name || 'Unknown',
-              type: conn.from_module_id === moduleId 
-                ? conn.modules_to?.type || null
-                : conn.modules_from?.type || null,
+              name: connectedModuleData.name || 'Unknown',
+              type: connectedModuleData.type || null,
               connectionType: conn.connection_type,
               schema: schema,
             });
