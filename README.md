@@ -114,14 +114,25 @@ Oppure usa Supabase CLI:
 supabase migration up
 ```
 
-Il file di migration si trova in `supabase/migrations/002_modular_system.sql` e crea:
+I file di migration si trovano in `supabase/migrations/`:
 
-- **workspaces**: Contenitori principali per utenti
-- **modules**: Moduli funzionali (Ordini, Clienti, Magazzino, etc.)
-- **module_versions**: Storico versioni di ogni modulo
-- **module_connections**: Relazioni tra moduli
+1. **`002_modular_system.sql`** - Crea la struttura del sistema modulare:
+   - **workspaces**: Contenitori principali per utenti
+   - **modules**: Moduli funzionali (Ordini, Clienti, Magazzino, etc.)
+   - **module_versions**: Storico versioni di ogni modulo
+   - **module_connections**: Relazioni tra moduli
 
-Vedi `supabase/migrations/002_modular_system.sql` per i dettagli completi.
+2. **`003_migrate_existing_data.sql`** - Migra i dati esistenti:
+   - Crea un workspace di default
+   - Migra tutte le app da `generated_apps` a moduli
+   - Crea versioni per ogni app esistente
+   - Mantiene `generated_apps` per compatibilità backward
+
+**Ordine di esecuzione:**
+1. Prima esegui `002_modular_system.sql`
+2. Poi esegui `003_migrate_existing_data.sql`
+
+Vedi `supabase/migrations/README.md` per i dettagli completi.
 
 ### 5. Avvia il server di sviluppo
 

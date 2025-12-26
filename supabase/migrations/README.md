@@ -5,6 +5,7 @@ Questa directory contiene le migration SQL per il database Supabase.
 ## Struttura
 
 - `002_modular_system.sql` - Sistema modulare con workspaces, modules, versions e connections
+- `003_migrate_existing_data.sql` - Migrazione dati esistenti da `generated_apps` al nuovo sistema modulare
 
 ## Come Applicare le Migrations
 
@@ -40,8 +41,11 @@ Copia il contenuto del file SQL e eseguilo direttamente nel SQL Editor di Supaba
 
 Le migrations devono essere eseguite in ordine numerico:
 1. `001_initial.sql` (se esiste)
-2. `002_modular_system.sql`
-3. etc.
+2. `002_modular_system.sql` - Crea la struttura del sistema modulare
+3. `003_migrate_existing_data.sql` - Migra i dati esistenti da `generated_apps`
+4. etc.
+
+**Importante**: Esegui sempre `002_modular_system.sql` prima di `003_migrate_existing_data.sql`
 
 ## Rollback
 
