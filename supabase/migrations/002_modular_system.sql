@@ -1,82 +1,106 @@
+-- ========================================
 -- Migration: Modular System
 -- Description: Passa da "app singole" a "workspace con moduli collegati e versioni"
 -- Date: 2025-01-XX
+-- ========================================
 
--- Workspaces (contenitore principale utente)
+-- ========================================
+-- WORKSPACES: Contenitore principale utente
+-- ========================================
 CREATE TABLE IF NOT EXISTS workspaces (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL,
-  name TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT 'My Workspace',
+  description TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Modules (ogni modulo es: Ordini, Clienti)
+CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id);
+
+-- ========================================
+-- MODULES: Ogni modulo ERP (Ordini, Clienti, ecc)
+-- ========================================
 CREATE TABLE IF NOT EXISTS modules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, -- "Ordini", "Clienti"
-  slug TEXT NOT NULL, -- "ordini", "clienti"
-  type TEXT, -- "orders", "customers", "inventory"
-  description TEXT,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   
-  -- Puntatori alle versioni attive
+  -- Identificazione
+  name TEXT NOT NULL, -- "Gestione Ordini"
+  slug TEXT NOT NULL, -- "ordini"
+  type TEXT, -- "orders", "customers", "inventory", "custom"
+  description TEXT,
+  icon TEXT, -- emoji o nome icona
+  
+  -- Puntatori alle versioni attive per ambiente
   dev_version_id UUID,
   staging_version_id UUID,
   prod_version_id UUID,
   
   -- Collegamenti con altri moduli
-  connected_modules JSONB DEFAULT '[]',
+  connected_modules JSONB DEFAULT '[]'::jsonb,
   
+  -- Metadata
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   
   UNIQUE(workspace_id, slug)
 );
 
--- Module Versions (storico versioni di ogni modulo)
+-- ========================================
+-- MODULE VERSIONS: Storico versioni di ogni modulo
+-- ========================================
 CREATE TABLE IF NOT EXISTS module_versions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
+  module_id UUID NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
   version_number INTEGER NOT NULL,
   
   -- Generazione
-  prompt TEXT NOT NULL,
-  files JSONB NOT NULL,
+  prompt TEXT NOT NULL, -- Prompt che ha creato questa versione
+  files JSONB NOT NULL, -- Codice generato
   
-  -- Schema database
+  -- Schema database del modulo
   database_schema JSONB,
   
   -- Deploy info
   github_repo_url TEXT,
+  github_branch TEXT DEFAULT 'main',
+  
   dev_deploy_url TEXT,
   staging_deploy_url TEXT,
   prod_deploy_url TEXT,
   
-  -- Status
-  status TEXT DEFAULT 'draft', -- 'draft', 'deployed_dev', 'deployed_staging', 'deployed_prod'
+  -- Status tracking
+  status TEXT DEFAULT 'draft', -- 'draft', 'deploying', 'deployed_dev', 'deployed_staging', 'deployed_prod', 'failed'
+  build_log TEXT, -- Log del build (per debug)
+  
+  -- Relazioni versioni
+  parent_version_id UUID REFERENCES module_versions(id),
   
   -- Metadata
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  created_by TEXT, -- descrizione azione che ha creato
-  parent_version_id UUID REFERENCES module_versions(id),
+  created_by TEXT, -- Descrizione azione/utente
   
   UNIQUE(module_id, version_number)
 );
 
--- Module Connections (relazioni tra moduli)
+-- ========================================
+-- MODULE CONNECTIONS: Relazioni tra moduli
+-- ========================================
 CREATE TABLE IF NOT EXISTS module_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  from_module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
-  to_module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   
-  connection_type TEXT, -- 'foreign_key', 'api', 'shared_data'
+  from_module_id UUID NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  to_module_id UUID NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
   
-  -- Config connessione
-  from_field TEXT,
-  to_field TEXT,
-  config JSONB,
+  -- Tipo di connessione
+  connection_type TEXT NOT NULL, -- 'foreign_key', 'api_call', 'shared_data'
+  
+  -- Configurazione connessione
+  from_field TEXT, -- Campo nel modulo sorgente
+  to_field TEXT, -- Campo nel modulo destinazione
+  config JSONB DEFAULT '{}'::jsonb, -- Config aggiuntiva
   
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   
@@ -91,16 +115,55 @@ CREATE INDEX IF NOT EXISTS idx_module_versions_status ON module_versions(status)
 CREATE INDEX IF NOT EXISTS idx_module_connections_workspace ON module_connections(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_module_connections_from ON module_connections(from_module_id);
 CREATE INDEX IF NOT EXISTS idx_module_connections_to ON module_connections(to_module_id);
-CREATE INDEX IF NOT EXISTS idx_workspaces_user ON workspaces(user_id);
 
--- Foreign key constraints per versioni attive (opzionale, per integrità referenziale)
--- Nota: Questi constraint potrebbero essere aggiunti dopo se necessario
--- ALTER TABLE modules ADD CONSTRAINT fk_dev_version 
---   FOREIGN KEY (dev_version_id) REFERENCES module_versions(id);
--- ALTER TABLE modules ADD CONSTRAINT fk_staging_version 
---   FOREIGN KEY (staging_version_id) REFERENCES module_versions(id);
--- ALTER TABLE modules ADD CONSTRAINT fk_prod_version 
---   FOREIGN KEY (prod_version_id) REFERENCES module_versions(id);
+-- ========================================
+-- ROW LEVEL SECURITY (opzionale per multi-tenant futuro)
+-- ========================================
+ALTER TABLE workspaces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE modules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE module_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE module_connections ENABLE ROW LEVEL SECURITY;
+
+-- Policy permissiva per ora (tutti possono tutto)
+-- In futuro: filtrare per user_id
+CREATE POLICY "Enable all for workspaces" ON workspaces FOR ALL USING (true);
+CREATE POLICY "Enable all for modules" ON modules FOR ALL USING (true);
+CREATE POLICY "Enable all for module_versions" ON module_versions FOR ALL USING (true);
+CREATE POLICY "Enable all for module_connections" ON module_connections FOR ALL USING (true);
+
+-- ========================================
+-- FUNZIONI UTILITY
+-- ========================================
+
+-- Funzione per auto-increment version_number
+CREATE OR REPLACE FUNCTION get_next_version_number(p_module_id UUID)
+RETURNS INTEGER AS $$
+DECLARE
+  next_version INTEGER;
+BEGIN
+  SELECT COALESCE(MAX(version_number), 0) + 1
+  INTO next_version
+  FROM module_versions
+  WHERE module_id = p_module_id;
+  
+  RETURN next_version;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger per aggiornare updated_at automaticamente
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_workspaces_updated_at BEFORE UPDATE ON workspaces
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_modules_updated_at BEFORE UPDATE ON modules
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Comments per documentazione
 COMMENT ON TABLE workspaces IS 'Workspaces: contenitori principali per utenti, ogni workspace può contenere più moduli';
@@ -113,5 +176,5 @@ COMMENT ON COLUMN modules.staging_version_id IS 'Puntatore alla versione attiva 
 COMMENT ON COLUMN modules.prod_version_id IS 'Puntatore alla versione attiva in ambiente production';
 COMMENT ON COLUMN modules.connected_modules IS 'Array JSON di ID moduli collegati';
 COMMENT ON COLUMN module_versions.parent_version_id IS 'ID della versione da cui è stata generata questa (per tracciare evoluzione)';
-COMMENT ON COLUMN module_connections.connection_type IS 'Tipo di connessione: foreign_key, api, shared_data';
+COMMENT ON COLUMN module_connections.connection_type IS 'Tipo di connessione: foreign_key, api_call, shared_data';
 
