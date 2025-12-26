@@ -29,50 +29,156 @@ function getGitHubClient() {
   return new Octokit({ auth: token });
 }
 
-// Parsea la risposta di Claude per estrarre i file
-function parseClaudeResponse(response: string): Record<string, string> {
-  const files: Record<string, string> = {};
-  const filePattern = /=== FILENAME: (.+?) ===/g;
-  const matches: Array<{ filename: string; startIndex: number; endIndex: number }> = [];
-  
-  // Trova tutti i match
+// Tipi per context-aware prompt
+interface Module {
+  id: string;
+  name: string;
+  type: string | null;
+  schema?: any;
+}
+
+interface ModuleVersion {
+  version_number: number;
+  files: Record<string, string>;
+  database_schema: any | null;
+  created_by: string | null;
+}
+
+interface ConnectableModule extends Module {
+  connectionType: string;
+  schema?: any;
+}
+
+// Costruisci prompt context-aware
+function buildIterativePrompt(params: {
+  userRequest: string;
+  currentModule: Module;
+  currentVersion: ModuleVersion;
+  connectableModules: ConnectableModule[];
+}): string {
+  const { userRequest, currentModule, currentVersion, connectableModules } = params;
+
+  return `
+SISTEMA: Assistente modifica ERP modulare
+
+WORKSPACE CONTEXT:
+- Modulo: ${currentModule.name}
+- Versione: ${currentVersion.version_number}
+- Ultima modifica: ${currentVersion.created_by || 'N/A'}
+
+CODICE ATTUALE:
+${JSON.stringify(currentVersion.files, null, 2)}
+
+SCHEMA DATABASE CORRENTE:
+${currentVersion.database_schema ? JSON.stringify(currentVersion.database_schema, null, 2) : 'Nessuno schema definito'}
+
+MODULI COLLEGABILI:
+${connectableModules.length > 0 ? connectableModules.map(m => `
+- ${m.name} (${m.type || 'N/A'})
+  Tipo connessione: ${m.connectionType}
+  Schema: ${m.schema ? JSON.stringify(m.schema, null, 2) : 'Nessuno schema disponibile'}
+  Disponibile per: foreign_key, api_call
+`).join('\n') : 'Nessun modulo collegabile'}
+
+RICHIESTA UTENTE:
+${userRequest}
+
+ISTRUZIONI CRITICHE:
+1. Modifica SOLO i file necessari (non tutto) - usa === MODIFIED: path/to/file.tsx ===
+2. Se la richiesta coinvolge altri moduli, usa le foreign key corrette
+3. Mantieni retrocompatibilità quando possibile
+4. Genera migration SQL se cambi schema database - usa === MIGRATION: migration.sql ===
+5. Aggiungi validazioni business appropriate (es: sconto max 30%)
+6. Tutti i tipi TypeScript devono essere completi
+7. Tutti i tag JSX devono essere chiusi
+8. Tutte le funzioni devono essere implementate completamente
+9. NON lasciare codice incompleto o placeholder
+
+OUTPUT FORMAT:
+=== MODIFIED: path/to/file.tsx ===
+[solo il codice modificato, completo e funzionante]
+
+=== MIGRATION: migration.sql ===
+[solo se cambi schema database, altrimenti ometti questa sezione]
+
+=== EXPLANATION ===
+[breve spiegazione modifiche in italiano]
+`;
+}
+
+// Parsea la risposta di Claude per estrarre file, migration e explanation
+function parseClaudeResponse(response: string): {
+  files: Record<string, string>;
+  migration?: string;
+  explanation?: string;
+} {
+  const result: {
+    files: Record<string, string>;
+    migration?: string;
+    explanation?: string;
+  } = {
+    files: {},
+  };
+
+  // Pattern per MODIFIED files
+  const modifiedPattern = /=== MODIFIED: (.+?) ===\n([\s\S]*?)(?=\n=== (?:MODIFIED|MIGRATION|EXPLANATION):|$)/g;
   let match;
-  while ((match = filePattern.exec(response)) !== null) {
-    matches.push({
-      filename: match[1].trim(),
-      startIndex: match.index + match[0].length,
-      endIndex: 0, // Sarà calcolato dopo
-    });
+  while ((match = modifiedPattern.exec(response)) !== null) {
+    const filename = match[1].trim();
+    let content = match[2].trim();
+    // Rimuovi markdown code blocks
+    content = content.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
+    if (filename && content) {
+      result.files[filename] = content;
+    }
   }
 
-  // Estrai il contenuto per ogni file
-  for (let i = 0; i < matches.length; i++) {
-    const currentMatch = matches[i];
-    const endIndex = i < matches.length - 1 ? matches[i + 1].startIndex - matches[i + 1].filename.length - 20 : response.length;
-    currentMatch.endIndex = endIndex;
+  // Pattern per MIGRATION
+  const migrationPattern = /=== MIGRATION: (.+?) ===\n([\s\S]*?)(?=\n=== (?:MODIFIED|MIGRATION|EXPLANATION):|$)/g;
+  const migrationMatch = migrationPattern.exec(response);
+  if (migrationMatch) {
+    let migration = migrationMatch[2].trim();
+    migration = migration.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
+    if (migration) {
+      result.migration = migration;
+    }
+  }
+
+  // Pattern per EXPLANATION
+  const explanationPattern = /=== EXPLANATION ===\n([\s\S]*?)(?=\n=== (?:MODIFIED|MIGRATION|EXPLANATION):|$)/g;
+  const explanationMatch = explanationPattern.exec(response);
+  if (explanationMatch) {
+    result.explanation = explanationMatch[1].trim();
+  }
+
+  // Fallback: se non trova MODIFIED, prova pattern vecchio
+  if (Object.keys(result.files).length === 0) {
+    const filePattern = /=== FILENAME: (.+?) ===/g;
+    const matches: Array<{ filename: string; startIndex: number; endIndex: number }> = [];
     
-    const content = response.substring(currentMatch.startIndex, currentMatch.endIndex).trim();
-    // Rimuovi eventuali markdown code blocks
-    const cleanedContent = content.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
-    files[currentMatch.filename] = cleanedContent;
-  }
+    let fileMatch;
+    while ((fileMatch = filePattern.exec(response)) !== null) {
+      matches.push({
+        filename: fileMatch[1].trim(),
+        startIndex: fileMatch.index + fileMatch[0].length,
+        endIndex: 0,
+      });
+    }
 
-  // Se non ci sono match con il pattern principale, prova pattern alternativi
-  if (Object.keys(files).length === 0) {
-    // Pattern alternativo: file con estensione seguito da contenuto
-    const altPattern = /(?:^|\n)([\/\w\-\.]+\.(tsx?|jsx?|ts|js|json)):?\s*\n([\s\S]*?)(?=\n(?:[\/\w\-\.]+\.(?:tsx?|jsx?|ts|js|json)):|$)/g;
-    let altMatch;
-    while ((altMatch = altPattern.exec(response)) !== null) {
-      const filename = altMatch[1].trim();
-      let content = altMatch[3].trim();
-      content = content.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
-      if (filename && content && content.length > 10) {
-        files[filename] = content;
+    for (let i = 0; i < matches.length; i++) {
+      const currentMatch = matches[i];
+      const endIndex = i < matches.length - 1 ? matches[i + 1].startIndex - matches[i + 1].filename.length - 20 : response.length;
+      currentMatch.endIndex = endIndex;
+      
+      const content = response.substring(currentMatch.startIndex, currentMatch.endIndex).trim();
+      const cleanedContent = content.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
+      if (currentMatch.filename && cleanedContent) {
+        result.files[currentMatch.filename] = cleanedContent;
       }
     }
   }
 
-  return files;
+  return result;
 }
 
 // Valida e fix codice (riutilizza logica)
@@ -415,17 +521,18 @@ export async function POST(
       }
     }
 
-    // Genera nuovo codice con AI (riutilizza logica da generate/route.ts)
-    console.log('[MODIFY] Generazione codice con AI...');
+    // Genera nuovo codice con AI usando context-aware prompt
+    console.log('[MODIFY] Generazione codice con AI (context-aware)...');
     
-    const systemPrompt = `Sei un esperto sviluppatore Next.js e TypeScript. 
+    const systemPrompt = `Sei un esperto sviluppatore Next.js e TypeScript specializzato in sistemi ERP modulari.
 Genera codice COMPLETO, COMPILABILE e FUNZIONANTE.
 NON lasciare codice incompleto o placeholder.
 Tutti i tipi devono essere completi.
 Tutti i tag JSX devono essere chiusi.
-Tutte le funzioni devono essere implementate completamente.`;
+Tutte le funzioni devono essere implementate completamente.
+Rispetta le relazioni tra moduli e le foreign key esistenti.`;
 
-    // Carica moduli collegabili per context
+    // Carica moduli collegabili con schema completo
     const { data: connectedModules } = await supabase
       .from('module_connections')
       .select(`
@@ -438,45 +545,69 @@ Tutte le funzioni devono essere implementate completamente.`;
       `)
       .or(`from_module_id.eq.${moduleId},to_module_id.eq.${moduleId}`);
 
-    // Costruisci context moduli collegabili
-    const contextModules = connectedModules?.map((conn: any) => ({
-      id: conn.from_module_id === moduleId ? conn.modules_to?.id : conn.modules_from?.id,
-      name: conn.from_module_id === moduleId ? conn.modules_to?.name : conn.modules_from?.name,
-      type: conn.from_module_id === moduleId ? conn.modules_to?.type : conn.modules_from?.type,
-      connectionType: conn.connection_type,
-    })) || [];
+    // Carica schema dei moduli collegabili
+    const connectableModules: ConnectableModule[] = [];
+    if (connectedModules) {
+      for (const conn of connectedModules) {
+        const connectedModuleId = conn.from_module_id === moduleId 
+          ? conn.modules_to?.id 
+          : conn.modules_from?.id;
+        
+        if (connectedModuleId) {
+          // Carica versione corrente del modulo collegato per ottenere schema
+          const { data: connectedModuleData } = await supabase
+            .from('modules')
+            .select('id, name, type, dev_version_id, staging_version_id, prod_version_id')
+            .eq('id', connectedModuleId)
+            .single();
 
-    // Carica schema database se disponibile
-    const databaseSchema = currentVersion?.database_schema 
-      ? JSON.stringify(currentVersion.database_schema, null, 2)
-      : null;
+          if (connectedModuleData) {
+            const versionId = connectedModuleData.dev_version_id || 
+                             connectedModuleData.staging_version_id || 
+                             connectedModuleData.prod_version_id;
 
-    // Context-aware prompt building
-    const contextInfo = [
-      databaseSchema ? `SCHEMA DATABASE ATTUALE:\n${databaseSchema}\n` : '',
-      contextModules.length > 0 
-        ? `MODULI COLLEGABILI:\n${contextModules.map((m: any) => `- ${m.name} (${m.type}, connection: ${m.connectionType})`).join('\n')}\n`
-        : '',
-    ].filter(Boolean).join('\n');
+            let schema = null;
+            if (versionId) {
+              const { data: versionData } = await supabase
+                .from('module_versions')
+                .select('database_schema')
+                .eq('id', versionId)
+                .single();
+              schema = versionData?.database_schema || null;
+            }
 
-    const userPrompt = currentFiles && Object.keys(currentFiles).length > 0
-      ? `Modifica il modulo esistente "${module.name}" con questa richiesta: ${prompt}
+            connectableModules.push({
+              id: connectedModuleId,
+              name: conn.from_module_id === moduleId 
+                ? conn.modules_to?.name || 'Unknown'
+                : conn.modules_from?.name || 'Unknown',
+              type: conn.from_module_id === moduleId 
+                ? conn.modules_to?.type || null
+                : conn.modules_from?.type || null,
+              connectionType: conn.connection_type,
+              schema: schema,
+            });
+          }
+        }
+      }
+    }
 
-${contextInfo}
-
-CODICE ESISTENTE:
-${Object.entries(currentFiles).map(([path, content]) => `=== FILENAME: ${path} ===\n${content}`).join('\n\n')}
-
-PROMPT PRECEDENTE: ${currentPrompt}
-
-MODIFICA RICHIESTA: ${prompt}
-
-IMPORTANTE: Genera SOLO i file MODIFICATI (DIFF). Se un file non viene modificato, NON includerlo nella risposta.
-Mantieni tutto il codice esistente che non viene modificato.
-Genera SOLO i file che cambiano, separati da === FILENAME: path/file.tsx ===`
-      : `Crea un nuovo modulo "${module.name}" con questa descrizione: ${prompt}
-
-Genera un'applicazione Next.js completa e funzionante.`;
+    // Costruisci prompt context-aware
+    const userPrompt = buildIterativePrompt({
+      userRequest: prompt,
+      currentModule: {
+        id: module.id,
+        name: module.name,
+        type: module.type,
+      },
+      currentVersion: {
+        version_number: currentVersion?.version_number || 1,
+        files: currentFiles,
+        database_schema: currentVersion?.database_schema || null,
+        created_by: currentVersion?.created_by || null,
+      },
+      connectableModules: connectableModules,
+    });
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -488,14 +619,25 @@ Genera un'applicazione Next.js completa e funzionante.`;
       }],
     });
 
-    // Estrai files dal response
+    // Estrai files, migration e explanation dal response
     const content = message.content[0];
     if (content.type !== 'text') {
       throw new Error('Risposta AI non valida');
     }
 
     const text = content.text;
-    const modifiedFiles = parseClaudeResponse(text);
+    const parsedResponse = parseClaudeResponse(text);
+    const modifiedFiles = parsedResponse.files;
+    
+    // Log explanation se presente
+    if (parsedResponse.explanation) {
+      console.log('[MODIFY] Spiegazione modifiche:', parsedResponse.explanation);
+    }
+    
+    // Log migration se presente
+    if (parsedResponse.migration) {
+      console.log('[MODIFY] Migration SQL generata:', parsedResponse.migration.substring(0, 100) + '...');
+    }
 
     if (Object.keys(modifiedFiles).length === 0) {
       throw new Error('Nessun file generato dalla AI');
@@ -548,6 +690,14 @@ Genera un'applicazione Next.js completa e funzionante.`;
       ? existingVersions[0].version_number + 1
       : 1;
 
+    // Aggiorna schema database se migration è presente
+    let updatedSchema = currentVersion?.database_schema || null;
+    if (parsedResponse.migration) {
+      // In futuro, potremmo parsare la migration SQL per aggiornare lo schema
+      // Per ora, manteniamo lo schema esistente
+      console.log('[MODIFY] Migration SQL disponibile ma schema non aggiornato automaticamente');
+    }
+
     // Crea nuova versione
     const { data: newVersion, error: versionError } = await supabase
       .from('module_versions')
@@ -556,9 +706,10 @@ Genera un'applicazione Next.js completa e funzionante.`;
         version_number: nextVersionNumber,
         prompt: prompt,
         files: files,
+        database_schema: updatedSchema,
         status: 'draft',
         parent_version_id: parentVersionId,
-        created_by: `Modifica iterativa in ${environment}`,
+        created_by: `Modifica iterativa in ${environment}${parsedResponse.explanation ? ': ' + parsedResponse.explanation.substring(0, 50) : ''}`,
       })
       .select()
       .single();
@@ -611,6 +762,8 @@ Genera un'applicazione Next.js completa e funzionante.`;
       versionId: newVersion.id,
       devUrl: devUrl || undefined,
       changedFiles,
+      migrationSql: parsedResponse.migration || undefined,
+      explanation: parsedResponse.explanation || undefined,
       message: 'Modulo modificato con successo',
     });
   } catch (error) {
