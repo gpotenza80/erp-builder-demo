@@ -379,7 +379,7 @@ export async function POST(
       : 1;
 
     // Crea nuova versione copiando da DEV
-    const { data: newVersion, error: versionError } = await supabase
+    const { data: newVersion, error: newVersionError } = await supabase
       .from('module_versions')
       .insert({
         module_id: moduleId,
@@ -394,9 +394,9 @@ export async function POST(
       .select()
       .single();
 
-    if (versionError || !newVersion) {
+    if (newVersionError || !newVersion) {
       return NextResponse.json(
-        { success: false, error: versionError?.message || 'Errore creazione versione' },
+        { success: false, error: newVersionError?.message || 'Errore creazione versione' },
         { status: 500 }
       );
     }
