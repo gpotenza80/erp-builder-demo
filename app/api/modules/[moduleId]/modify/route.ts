@@ -224,8 +224,8 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
       .map((block) => (block.type === 'text' ? block.text : ''))
       .join('\n');
 
-    const fixedFiles = parseClaudeResponse(responseText);
-    return validateAndFixCode(fixedFiles, originalPrompt, anthropic, attempt + 1);
+    const parsedResponse = parseClaudeResponse(responseText);
+    return validateAndFixCode(parsedResponse.files, originalPrompt, anthropic, attempt + 1);
   } catch (error) {
     return { success: false, files, errors };
   }
