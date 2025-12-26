@@ -15,6 +15,13 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-4">
               <Link
+                href="/dashboard"
+                className="text-sm text-gray-600 hover:text-blue-600 transition-colors font-medium"
+              >
+                🎯 Dashboard Moduli
+              </Link>
+              <span className="text-sm text-gray-400">|</span>
+              <Link
                 href="/apps"
                 className="text-sm text-gray-600 hover:text-blue-600 transition-colors font-medium"
               >
