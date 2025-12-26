@@ -179,10 +179,132 @@ export default config;`,
   const repoUrl = repo.html_url;
   const deployUrl = `https://${repoName}.vercel.app`;
 
-  // Deploy su Vercel (semplificato - usa la logica esistente se necessario)
-  // Per ora restituiamo solo l'URL, il deploy verrà fatto manualmente o via webhook
+  // Deploy su Vercel
+  const vercelToken = process.env.VERCEL_TOKEN;
+  if (vercelToken) {
+    try {
+      const { data: repoData } = await octokit.rest.repos.get({
+        owner: username,
+        repo: repoName,
+      });
+      const repoId = repoData.id;
+
+      // Crea progetto Vercel
+      const projectResponse = await fetch('https://api.vercel.com/v9/projects', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${vercelToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: repoName,
+          framework: 'nextjs',
+          gitRepository: {
+            type: 'github',
+            repo: `${username}/${repoName}`,
+            repoId: repoId,
+          },
+          environmentVariables: [
+            {
+              key: 'NEXT_PUBLIC_SUPABASE_URL',
+              value: process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+              type: 'plain',
+              target: ['production', 'preview', 'development'],
+            },
+            {
+              key: 'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+              value: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+              type: 'plain',
+              target: ['production', 'preview', 'development'],
+            },
+          ],
+        }),
+      });
+
+      if (projectResponse.ok) {
+        const projectData = await projectResponse.json();
+        // Trigger deployment
+        await fetch('https://api.vercel.com/v13/deployments', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${vercelToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: repoName,
+            project: projectData.id,
+            target: 'production',
+            gitSource: {
+              type: 'github',
+              repoId: repoId,
+              ref: 'main',
+            },
+          }),
+        });
+      }
+    } catch (error) {
+      console.warn('[DEPLOY] Errore deploy Vercel:', error);
+    }
+  }
 
   return { repoUrl, deployUrl };
+}
+
+// Genera migration SQL per PROD
+async function generateMigrationSQL(
+  module: any,
+  version: any,
+  supabase: ReturnType<typeof getSupabaseClient>
+): Promise<string> {
+  try {
+    // Carica schema database dalla versione
+    const schema = version.database_schema || {};
+    
+    // Carica connessioni per foreign keys
+    const { data: connections } = await supabase
+      .from('module_connections')
+      .select('*')
+      .or(`from_module_id.eq.${module.id},to_module_id.eq.${module.id}`);
+
+    // Genera SQL basato su schema
+    const tables = schema.tables || [];
+    const sqlStatements: string[] = [];
+
+    for (const table of tables) {
+      const columns = table.columns || [];
+      const columnDefs = columns.map((col: any) => {
+        let def = `${col.name} ${col.type}`;
+        if (col.primaryKey) def += ' PRIMARY KEY';
+        if (col.notNull && !col.primaryKey) def += ' NOT NULL';
+        if (col.default) def += ` DEFAULT ${col.default}`;
+        return def;
+      }).join(',\n    ');
+
+      sqlStatements.push(`CREATE TABLE IF NOT EXISTS ${table.name} (
+    ${columnDefs}
+);`);
+
+      // Aggiungi foreign keys dalle connessioni
+      if (connections) {
+        for (const conn of connections) {
+          if (conn.connection_type === 'foreign_key' && conn.config) {
+            const config = typeof conn.config === 'string' ? JSON.parse(conn.config) : conn.config;
+            if (config.fromField && config.toField) {
+              sqlStatements.push(`ALTER TABLE ${table.name} 
+    ADD CONSTRAINT fk_${table.name}_${config.fromField} 
+    FOREIGN KEY (${config.fromField}) 
+    REFERENCES ${config.toTable || 'unknown'}(${config.toField});`);
+            }
+          }
+        }
+      }
+    }
+
+    return sqlStatements.join('\n\n');
+  } catch (error) {
+    console.error('[DEPLOY] Errore generazione migration SQL:', error);
+    return '-- Migration SQL generation failed';
+  }
 }
 
 // POST - Deploy modulo
@@ -195,9 +317,9 @@ export async function POST(
     const body = await request.json();
     const { environment } = body; // 'staging' | 'prod'
 
-    if (!environment || !['staging', 'prod'].includes(environment)) {
+    if (!environment || !['staging', 'production'].includes(environment)) {
       return NextResponse.json(
-        { success: false, error: 'Environment deve essere staging o prod' },
+        { success: false, error: 'Environment deve essere staging o production' },
         { status: 400 }
       );
     }
@@ -220,12 +342,12 @@ export async function POST(
 
     // Determina versione da deployare
     const sourceVersionId = 
-      environment === 'prod' ? module.staging_version_id :
+      environment === 'production' ? module.staging_version_id :
       module.dev_version_id;
 
     if (!sourceVersionId) {
       return NextResponse.json(
-        { success: false, error: `Nessuna versione ${environment === 'prod' ? 'staging' : 'dev'} disponibile per il deploy` },
+        { success: false, error: `Nessuna versione ${environment === 'production' ? 'staging' : 'dev'} disponibile per il deploy` },
         { status: 400 }
       );
     }
@@ -244,22 +366,64 @@ export async function POST(
       );
     }
 
+    // Copia versione DEV corrente (crea nuova versione per l'ambiente target)
+    const { data: existingVersions } = await supabase
+      .from('module_versions')
+      .select('version_number')
+      .eq('module_id', moduleId)
+      .order('version_number', { ascending: false })
+      .limit(1);
+
+    const nextVersionNumber = existingVersions && existingVersions.length > 0
+      ? existingVersions[0].version_number + 1
+      : 1;
+
+    // Crea nuova versione copiando da DEV
+    const { data: newVersion, error: versionError } = await supabase
+      .from('module_versions')
+      .insert({
+        module_id: moduleId,
+        version_number: nextVersionNumber,
+        prompt: `Deploy to ${environment.toUpperCase()}: ${version.prompt || 'Deployment'}`,
+        files: version.files || {},
+        database_schema: version.database_schema || null,
+        parent_version_id: sourceVersionId,
+        status: 'draft',
+        created_by: `Deploy to ${environment.toUpperCase()}`,
+      })
+      .select()
+      .single();
+
+    if (versionError || !newVersion) {
+      return NextResponse.json(
+        { success: false, error: versionError?.message || 'Errore creazione versione' },
+        { status: 500 }
+      );
+    }
+
     // Deploy (crea repo e push)
-    console.log(`[DEPLOY] Deploy versione ${version.version_number} in ${environment}...`);
+    console.log(`[DEPLOY] Deploy versione ${newVersion.version_number} in ${environment}...`);
     const { repoUrl, deployUrl } = await deployModuleVersion(
       moduleId,
-      sourceVersionId,
-      version.files || {},
+      newVersion.id,
+      newVersion.files || {},
       module.name
     );
 
+    // Genera migration SQL se PROD
+    let migrationSql: string | null = null;
+    if (environment === 'production') {
+      console.log('[DEPLOY] Generazione migration SQL per PROD...');
+      migrationSql = await generateMigrationSQL(module, newVersion, supabase);
+    }
+
     // Aggiorna versione con deploy URLs
     const deployUrlField = 
-      environment === 'prod' ? 'prod_deploy_url' :
+      environment === 'production' ? 'prod_deploy_url' :
       'staging_deploy_url';
 
     const statusField = 
-      environment === 'prod' ? 'deployed_prod' :
+      environment === 'production' ? 'deployed_prod' :
       'deployed_staging';
 
     await supabase
@@ -269,25 +433,25 @@ export async function POST(
         github_repo_url: repoUrl,
         status: statusField,
       })
-      .eq('id', sourceVersionId);
+      .eq('id', newVersion.id);
 
     // Aggiorna puntatore versione nel modulo
     const versionField = 
-      environment === 'prod' ? 'prod_version_id' :
+      environment === 'production' ? 'prod_version_id' :
       'staging_version_id';
 
     await supabase
       .from('modules')
       .update({
-        [versionField]: sourceVersionId,
+        [versionField]: newVersion.id,
         updated_at: new Date().toISOString(),
       })
       .eq('id', moduleId);
 
     return NextResponse.json({
       success: true,
-      repoUrl,
       deployUrl,
+      migrationSql: migrationSql || undefined,
       message: `Modulo deployato in ${environment.toUpperCase()}`,
     });
   } catch (error) {

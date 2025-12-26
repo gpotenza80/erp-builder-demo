@@ -33,9 +33,18 @@ export async function GET(
       );
     }
 
+    // Formatta response come richiesto
+    const formattedVersions = (versions || []).map((v: any) => ({
+      id: v.id,
+      number: v.version_number,
+      prompt: v.prompt,
+      createdAt: v.created_at,
+      status: v.status,
+    }));
+
     return NextResponse.json({
       success: true,
-      versions: versions || [],
+      versions: formattedVersions,
     });
   } catch (error) {
     console.error('[VERSIONS] Errore:', error);
