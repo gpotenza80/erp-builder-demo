@@ -398,18 +398,20 @@ export async function POST(
     let currentFiles: Record<string, string> = {};
     let currentPrompt = '';
     let parentVersionId: string | null = null;
+    let currentVersion: any = null;
 
     if (versionId) {
-      const { data: currentVersion } = await supabase
+      const { data: versionData } = await supabase
         .from('module_versions')
         .select('*')
         .eq('id', versionId)
         .single();
 
-      if (currentVersion) {
-        currentFiles = currentVersion.files || {};
-        currentPrompt = currentVersion.prompt || '';
-        parentVersionId = currentVersion.id;
+      if (versionData) {
+        currentVersion = versionData;
+        currentFiles = versionData.files || {};
+        currentPrompt = versionData.prompt || '';
+        parentVersionId = versionData.id;
       }
     }
 
