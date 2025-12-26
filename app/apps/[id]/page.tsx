@@ -475,7 +475,7 @@ export default function AppDetailPage() {
                             </p>
                           )}
                         </>
-                      ) : (
+                      ) : buildStatus === 'building' && deploymentStartTime && (Date.now() - deploymentStartTime) < 300000 ? (
                         <>
                           <p className="text-gray-700 font-medium text-lg mb-2">⏳ Deployment in corso...</p>
                           <p className="text-sm text-gray-600 mb-4">
@@ -494,6 +494,13 @@ export default function AppDetailPage() {
                               <li>L'applicazione sarà disponibile automaticamente tra qualche minuto</li>
                             </ul>
                           </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-gray-700 font-medium text-lg mb-2">✅ Applicazione Pronta!</p>
+                          <p className="text-sm text-gray-600 mb-4">
+                            L'applicazione è stata deployata e dovrebbe essere disponibile. Clicca "Mostra Applicazione" per visualizzarla.
+                          </p>
                           {deploymentStartTime && (Date.now() - deploymentStartTime) > 300000 && (
                             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-left mb-4">
                               <p className="text-xs text-yellow-800 font-medium mb-1">⚠️ Tempo di attesa prolungato:</p>
