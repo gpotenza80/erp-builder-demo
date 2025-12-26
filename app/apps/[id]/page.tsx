@@ -37,20 +37,16 @@ export default function AppDetailPage() {
   }, [appId]);
 
   useEffect(() => {
-    if (app?.deployUrl && app?.created_at) {
-      const createdTime = new Date(app.created_at).getTime();
+    // Solo per app appena create (meno di 5 minuti fa), fai polling
+    if (app?.deployUrl && app?.created_at && deploymentStartTime) {
+      const createdTime = deploymentStartTime;
       const now = Date.now();
       const elapsed = now - createdTime;
       
-      // Se l'app è stata creata più di 5 minuti fa, considera già deployata
+      // Se è già passato più di 5 minuti, non serve più fare polling
       if (elapsed > 300000) {
-        setBuildStatus('live');
-        setShowIframe(true);
         return;
       }
-      
-      // Se è stata creata da poco, imposta il timer di inizio
-      setDeploymentStartTime(createdTime);
       
       // Controlla periodicamente se il deployment è disponibile
       const checkDeployment = async () => {
@@ -64,19 +60,20 @@ export default function AppDetailPage() {
           return;
         }
         
-        // Dopo 5 minuti, mostra comunque l'iframe (anche se potrebbe non essere pronto)
-        if (currentElapsed > 300000 && !showIframe) {
+        // Dopo 5 minuti, mostra comunque l'iframe
+        if (currentElapsed > 300000) {
           setShowIframe(true);
           setBuildStatus('live');
+          clearInterval(checkInterval);
         }
       };
 
       // Controlla ogni 30 secondi
       const checkInterval = setInterval(checkDeployment, 30000);
       
-      // Dopo 3 minuti, mostra automaticamente l'iframe (anche se potrebbe non essere pronto)
+      // Dopo 3 minuti, mostra automaticamente l'iframe
       const autoShowTimeout = setTimeout(() => {
-        if (!showIframe) {
+        if (buildStatus === 'building') {
           setShowIframe(true);
           setBuildStatus('live');
         }
@@ -87,7 +84,7 @@ export default function AppDetailPage() {
         clearTimeout(autoShowTimeout);
       };
     }
-  }, [app?.deployUrl, app?.created_at, showIframe]);
+  }, [app?.deployUrl, deploymentStartTime, buildStatus]);
 
   const loadApp = async () => {
     setIsLoading(true);
@@ -100,32 +97,31 @@ export default function AppDetailPage() {
       if (data.success && data.app) {
         setApp(data.app);
         // Se l'app ha un deployUrl, verifica quando è stata creata
-        if (data.app.deployUrl && data.app.created_at) {
-          const createdTime = new Date(data.app.created_at).getTime();
-          const now = Date.now();
-          const elapsed = now - createdTime;
-          
-          // Se sono passati più di 5 minuti dalla creazione, considera già deployata
-          if (elapsed > 300000) {
-            setShowIframe(true);
-            setBuildStatus('live');
-          } else {
-            // Se è stata creata da poco, mostra come "building"
-            setShowIframe(false);
-            setBuildStatus('building');
-          }
-          
-          setDeploymentStartTime(createdTime);
-          
-          // Se sono passati più di 10 minuti dalla creazione, mostra lo stato di errore
-          if (elapsed > 600000) {
-            setBuildStatus('error');
-            setShowIframe(true); // Mostra comunque l'iframe per permettere all'utente di vedere
-          }
-        } else if (data.app.deployUrl) {
-          // Se c'è deployUrl ma non created_at, mostra come live
+        if (data.app.deployUrl) {
+          // Di default, mostra sempre l'iframe se c'è un deployUrl
           setShowIframe(true);
-          setBuildStatus('live');
+          
+          if (data.app.created_at) {
+            const createdTime = new Date(data.app.created_at).getTime();
+            const now = Date.now();
+            const elapsed = now - createdTime;
+            
+            setDeploymentStartTime(createdTime);
+            
+            // Se sono passati più di 5 minuti dalla creazione, considera già deployata
+            if (elapsed > 300000) {
+              setBuildStatus('live');
+            } else if (elapsed > 600000) {
+              // Se sono passati più di 10 minuti, mostra errore
+              setBuildStatus('error');
+            } else {
+              // Se è stata creata da poco, mostra come "building" ma mostra comunque l'iframe
+              setBuildStatus('building');
+            }
+          } else {
+            // Se c'è deployUrl ma non created_at, mostra come live
+            setBuildStatus('live');
+          }
         }
       } else {
         setError(data.error || 'App non trovata');
