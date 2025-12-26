@@ -28,6 +28,7 @@ interface ModuleVersion {
   dev_deploy_url: string | null;
   staging_deploy_url: string | null;
   prod_deploy_url: string | null;
+  database_schema: any | null;
   created_at: string;
   created_by: string | null;
 }
