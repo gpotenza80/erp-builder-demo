@@ -495,7 +495,7 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
 
     // Deploy
     console.log('[CREATE] Deploy su GitHub e Vercel...');
-    const { repoUrl, deployUrl } = await createDeployment(module.id, files, name);
+    const { repoUrl, deployUrl } = await createDeployment(module.id, files, finalName);
 
     // Crea versione v1
     const { data: version, error: versionError } = await supabase
