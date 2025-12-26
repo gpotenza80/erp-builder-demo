@@ -84,6 +84,8 @@ SUPABASE_URL=https://xxxxx.supabase.co  # Opzionale, usa NEXT_PUBLIC_SUPABASE_UR
 
 ### 4. Configura Supabase
 
+#### Opzione A: Sistema Legacy (app singole)
+
 Crea una tabella `generated_apps` in Supabase con questo schema:
 
 ```sql
@@ -97,6 +99,29 @@ CREATE TABLE generated_apps (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
+
+#### Opzione B: Sistema Modulare (raccomandato)
+
+Esegui la migration per il sistema modulare:
+
+```bash
+# In Supabase SQL Editor, esegui:
+```
+
+Oppure usa Supabase CLI:
+
+```bash
+supabase migration up
+```
+
+Il file di migration si trova in `supabase/migrations/002_modular_system.sql` e crea:
+
+- **workspaces**: Contenitori principali per utenti
+- **modules**: Moduli funzionali (Ordini, Clienti, Magazzino, etc.)
+- **module_versions**: Storico versioni di ogni modulo
+- **module_connections**: Relazioni tra moduli
+
+Vedi `supabase/migrations/002_modular_system.sql` per i dettagli completi.
 
 ### 5. Avvia il server di sviluppo
 
