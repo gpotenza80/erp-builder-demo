@@ -26,9 +26,14 @@ export $(grep -v '^#' .env.local | grep -v '^$' | xargs)
 # Carica VERCEL_TOKEN (usa quello fornito o quello da .env.local)
 VERCEL_TOKEN="${VERCEL_TOKEN:-$(grep "^VERCEL_TOKEN=" .env.local 2>/dev/null | cut -d '=' -f2- | tr -d '"' | tr -d "'" | xargs)}"
 
-# Usa il token fornito dall'utente se disponibile
+# Usa il token fornito dall'utente se disponibile come argomento
 if [ ! -z "$1" ]; then
     VERCEL_TOKEN="$1"
+fi
+
+# Se ancora non c'è, prova a leggere da variabile d'ambiente
+if [ -z "$VERCEL_TOKEN" ] || [ "$VERCEL_TOKEN" = "your_vercel_token_here" ]; then
+    VERCEL_TOKEN="${VERCEL_TOKEN_ENV:-}"
 fi
 
 if [ -z "$VERCEL_TOKEN" ] || [ "$VERCEL_TOKEN" = "your_vercel_token_here" ]; then
@@ -167,11 +172,12 @@ done
 echo ""
 echo "🚀 Trigger deployment..."
 
-# Ottieni repoId se non l'abbiamo già
+# Ottieni repoId se non l'abbiamo già (per il deployment)
 if [ -z "$REPO_ID" ]; then
-    REPO_ID=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-        "https://api.github.com/repos/$GITHUB_USERNAME/$REPO_NAME" | \
-        grep -o '"id":[0-9]*' | cut -d':' -f2)
+    echo "🔍 Ottenimento repoId per deployment..."
+    GITHUB_RESPONSE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+        "https://api.github.com/repos/$GITHUB_USERNAME/$REPO_NAME")
+    REPO_ID=$(echo "$GITHUB_RESPONSE" | grep -oE '"id"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+')
 fi
 
 DEPLOY_RESPONSE=$(curl -s -X POST \

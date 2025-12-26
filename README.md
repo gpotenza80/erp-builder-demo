@@ -88,9 +88,28 @@ Apri [http://localhost:3000](http://localhost:3000) nel browser.
 
 ## 🚀 Deploy su Vercel
 
-### 🎯 Deploy Automatico (Raccomandato)
+### 🎯 Deploy Completamente Automatico (Raccomandato)
 
-Usa gli script automatici per deployare tutto in un click:
+**Un solo comando per fare tutto:**
+
+```bash
+npm run deploy:auto
+```
+
+Questo script esegue automaticamente:
+1. ✅ Setup GitHub (se necessario)
+2. ✅ Build locale per verificare errori
+3. ✅ Commit e push automatico delle modifiche
+4. ✅ Deploy su Vercel con API (senza interazione)
+5. ✅ Configurazione automatica di tutte le environment variables
+
+**Nessuna interazione richiesta!** 🚀
+
+---
+
+### 📦 Script Individuali
+
+Se preferisci eseguire i passaggi separatamente:
 
 #### 1. Setup GitHub (prima volta)
 
@@ -98,38 +117,23 @@ Usa gli script automatici per deployare tutto in un click:
 npm run setup:github
 ```
 
-Questo script:
-- ✅ Verifica che `.env.local` sia configurato
-- ✅ Crea automaticamente il repository GitHub
-- ✅ Configura il remote Git
-- ✅ Fa push del codice su GitHub
+Crea automaticamente il repository GitHub e configura il remote.
 
-#### 2. Deploy su Vercel
+#### 2. Deploy su Vercel (API diretta, senza CLI)
+
+```bash
+npm run deploy:vercel
+```
+
+Deploy automatico usando l'API Vercel direttamente. Configura automaticamente tutte le environment variables da `.env.local`.
+
+#### 3. Deploy con Vercel CLI (alternativa)
 
 ```bash
 npm run deploy
 ```
 
-Questo script:
-- ✅ Verifica tutti i prerequisiti
-- ✅ Controlla le variabili d'ambiente
-- ✅ Installa le dipendenze
-- ✅ Fa build del progetto
-- ✅ Deploya su Vercel usando Vercel CLI
-
-**Nota**: Alla prima esecuzione, Vercel CLI ti chiederà di:
-- Fare login (se non sei già loggato)
-- Selezionare o creare un progetto
-- Configurare le environment variables (puoi farlo anche dopo dal dashboard)
-
-#### 3. Configura Environment Variables su Vercel
-
-Dopo il primo deploy:
-1. Vai su [vercel.com/dashboard](https://vercel.com/dashboard)
-2. Seleziona il progetto deployato
-3. Vai su **Settings > Environment Variables**
-4. Aggiungi tutte le variabili da `.env.local`
-5. Fai un nuovo deploy per applicare le variabili
+Usa Vercel CLI (richiede login interattivo la prima volta).
 
 ---
 
@@ -192,12 +196,21 @@ Segui le istruzioni per configurare le environment variables.
 
 ## 📝 Script Disponibili
 
+### Sviluppo
 - `npm run dev` - Avvia il server di sviluppo
 - `npm run build` - Build per produzione
 - `npm run start` - Avvia il server di produzione (dopo il build)
 - `npm run lint` - Esegue ESLint
+
+### Deploy Automatico
+- `npm run deploy:auto` - **Deploy completamente automatico** (raccomandato)
+  - Setup GitHub + Build + Commit + Deploy Vercel tutto in uno
+- `npm run deploy:vercel` - Deploy su Vercel usando API (senza interazione)
+- `npm run deploy` - Deploy con Vercel CLI (richiede login)
+
+### Setup
 - `npm run setup:github` - Setup automatico repository GitHub (prima volta)
-- `npm run deploy` - Deploy automatico su Vercel
+- `npm run setup:all` - Setup GitHub + Deploy Vercel
 
 ## 🔧 Configurazione
 

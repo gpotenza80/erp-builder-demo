@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "deploy": "bash scripts/deploy.sh",
-    "setup:github": "bash scripts/setup-github.sh"
+    "deploy:vercel": "bash scripts/deploy-vercel-api.sh",
+    "deploy:auto": "bash scripts/deploy-full-auto.sh",
+    "setup:github": "bash scripts/setup-github.sh",
+    "setup:all": "npm run setup:github && npm run deploy:vercel"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
