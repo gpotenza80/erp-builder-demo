@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import type { Module, ModuleVersion } from '@/lib/supabase/schema';
 import IterativePrompt from '@/components/IterativePrompt';
@@ -29,44 +28,25 @@ export default function WorkspacePage() {
 
   async function loadModule() {
     try {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      // Usa API route invece di Supabase client diretto
+      const moduleResponse = await fetch(`/api/modules/${moduleId}`);
+      const moduleData = await moduleResponse.json();
 
-      if (!supabaseUrl || !supabaseKey) {
-        console.error('[Workspace] Variabili Supabase non configurate');
+      if (!moduleData.success || !moduleData.module) {
+        console.error('[Workspace] Modulo non trovato');
         setLoading(false);
         return;
       }
 
-      const supabase = createClient(supabaseUrl, supabaseKey);
-
-      // Carica modulo
-      const { data: moduleData, error: moduleError } = await supabase
-        .from('modules')
-        .select('*')
-        .eq('id', moduleId)
-        .single();
-
-      if (moduleError) {
-        console.error('[Workspace] Errore caricamento modulo:', moduleError);
-        setLoading(false);
-        return;
-      }
-
-      setModule(moduleData);
+      setModule(moduleData.module);
 
       // Carica versione DEV se esiste
-      if (moduleData?.dev_version_id) {
-        const { data: versionData, error: versionError } = await supabase
-          .from('module_versions')
-          .select('*')
-          .eq('id', moduleData.dev_version_id)
-          .single();
+      if (moduleData.module.dev_version_id) {
+        const versionResponse = await fetch(`/api/module-versions/${moduleData.module.dev_version_id}`);
+        const versionData = await versionResponse.json();
 
-        if (versionError) {
-          console.error('[Workspace] Errore caricamento versione:', versionError);
-        } else {
-          setDevVersion(versionData);
+        if (versionData.success && versionData.version) {
+          setDevVersion(versionData.version);
         }
       }
     } catch (error) {

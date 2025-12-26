@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import type { Workspace, Module } from '@/lib/supabase/schema';
@@ -17,42 +16,29 @@ export default function DashboardPage() {
 
   async function loadWorkspaceAndModules() {
     try {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      // Usa API route invece di Supabase client diretto per evitare problemi con variabili d'ambiente
+      const workspaceResponse = await fetch('/api/workspaces');
+      const workspaceData = await workspaceResponse.json();
 
-      if (!supabaseUrl || !supabaseKey) {
-        console.error('[Dashboard] Variabili Supabase non configurate');
-        setLoading(false);
-        return;
-      }
+      let currentWorkspace: Workspace | null = null;
 
-      const supabase = createClient(supabaseUrl, supabaseKey);
-
-      // Carica workspace (per ora: primo workspace trovato)
-      const { data: workspaceData, error: workspaceError } = await supabase
-        .from('workspaces')
-        .select('*')
-        .limit(1)
-        .maybeSingle();
-
-      let currentWorkspace = workspaceData;
-
-      if (!workspaceData && !workspaceError) {
+      if (workspaceData.success && workspaceData.workspaces?.length > 0) {
+        currentWorkspace = workspaceData.workspaces[0];
+      } else {
         // Crea workspace di default se non esiste
-        const { data: newWorkspace, error: createError } = await supabase
-          .from('workspaces')
-          .insert({
+        const createResponse = await fetch('/api/workspaces', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
             user_id: 'default_user',
             name: 'My ERP Workspace',
             description: 'Il mio workspace ERP personalizzato'
-          })
-          .select()
-          .single();
+          }),
+        });
+        const createData = await createResponse.json();
         
-        if (createError) {
-          console.error('[Dashboard] Errore creazione workspace:', createError);
-        } else {
-          currentWorkspace = newWorkspace;
+        if (createData.success) {
+          currentWorkspace = createData.workspace;
         }
       }
 
@@ -60,21 +46,18 @@ export default function DashboardPage() {
         setWorkspace(currentWorkspace);
 
         // Carica moduli del workspace
-        const { data: modulesData, error: modulesError } = await supabase
-          .from('modules')
-          .select('*')
-          .eq('workspace_id', currentWorkspace.id)
-          .order('created_at', { ascending: false });
+        const modulesResponse = await fetch(`/api/workspaces/${currentWorkspace.id}/modules`);
+        const modulesData = await modulesResponse.json();
 
-        if (modulesError) {
-          console.error('[Dashboard] Errore caricamento moduli:', modulesError);
-          setModules([]);
+        if (modulesData.success) {
+          setModules(modulesData.modules || []);
         } else {
-          setModules(modulesData || []);
+          setModules([]);
         }
       }
     } catch (error) {
       console.error('[Dashboard] Errore:', error);
+      setModules([]);
     } finally {
       setLoading(false);
     }
