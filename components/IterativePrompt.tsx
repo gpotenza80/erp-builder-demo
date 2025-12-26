@@ -1,206 +1,153 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-
-interface ConnectedModule {
-  id: string;
-  name: string;
-  type: string;
-  description?: string;
-}
-
-interface PromptHistory {
-  id: string;
-  prompt: string;
-  created_at: string;
-  version_number: number;
-}
+import { useState } from 'react';
 
 interface IterativePromptProps {
-  moduleId: string;
-  moduleName: string;
-  connectedModules?: ConnectedModule[];
-  promptHistory?: PromptHistory[];
-  onModify: (prompt: string) => Promise<void>;
-  isLoading?: boolean;
+  moduleId: string | null; // null = nuovo modulo
+  currentVersion?: any;
+  onGenerated?: (moduleId: string) => void;
 }
 
-export default function IterativePrompt({
-  moduleId,
-  moduleName,
-  connectedModules = [],
-  promptHistory = [],
-  onModify,
-  isLoading = false,
+export default function IterativePrompt({ 
+  moduleId, 
+  currentVersion,
+  onGenerated 
 }: IterativePromptProps) {
   const [prompt, setPrompt] = useState('');
-  const [showHistory, setShowHistory] = useState(false);
-  const [showContext, setShowContext] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!prompt.trim() || isLoading) return;
-    await onModify(prompt);
-    setPrompt('');
-  };
+    
+    if (!prompt.trim()) {
+      setError('Inserisci una descrizione del modulo');
+      return;
+    }
 
-  const useHistoryPrompt = (historyPrompt: string) => {
-    setPrompt(historyPrompt);
-    setShowHistory(false);
-  };
+    setLoading(true);
+    setError(null);
+
+    try {
+      const endpoint = moduleId 
+        ? `/api/modules/${moduleId}/modify`
+        : '/api/modules/create';
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Errore durante la generazione');
+      }
+
+      const data = await response.json();
+      
+      if (onGenerated && data.moduleId) {
+        onGenerated(data.moduleId);
+      }
+      
+      setPrompt('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Errore sconosciuto');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const examplePrompts = moduleId ? [
+    "Aggiungi campo sconto con validazione max 30%",
+    "Collega questo modulo ai Clienti",
+    "Aggiungi filtro per data",
+  ] : [
+    "Gestione ordini con cliente, data, importo, stato",
+    "Anagrafica clienti con nome, email, telefono",
+    "Magazzino prodotti con giacenza e prezzo",
+  ];
 
   return (
-    <div className="space-y-6">
-      {/* Context Info - Moduli Collegabili */}
-      {showContext && connectedModules.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-blue-50 border border-blue-200 rounded-lg p-4"
-        >
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-blue-800 flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Moduli Collegabili
-            </h3>
-            <button
-              onClick={() => setShowContext(false)}
-              className="text-blue-600 hover:text-blue-800"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="mb-4">
+        <h3 className="text-lg font-semibold mb-2">
+          {moduleId ? 'Modifica Modulo' : 'Descrivi il Modulo'}
+        </h3>
+        <p className="text-sm text-gray-600">
+          {moduleId 
+            ? 'Descrivi le modifiche che vuoi apportare al modulo'
+            : 'Descrivi cosa deve fare il modulo in linguaggio naturale'
+          }
+        </p>
+      </div>
+
+      {/* Example prompts */}
+      {!moduleId && (
+        <div className="mb-4">
+          <p className="text-xs text-gray-500 mb-2">Esempi:</p>
           <div className="flex flex-wrap gap-2">
-            {connectedModules.map((module) => (
-              <span
-                key={module.id}
-                className="px-3 py-1 bg-white border border-blue-300 rounded-full text-xs font-medium text-blue-700"
+            {examplePrompts.map((example, i) => (
+              <button
+                key={i}
+                onClick={() => setPrompt(example)}
+                className="text-xs px-3 py-1 bg-blue-50 text-blue-700 rounded-full hover:bg-blue-100"
               >
-                {module.name}
-              </span>
+                {example}
+              </button>
             ))}
           </div>
-          <p className="text-xs text-blue-700 mt-2">
-            Puoi fare riferimento a questi moduli nel tuo prompt per creare connessioni
-          </p>
-        </motion.div>
+        </div>
       )}
 
-      {/* Prompt History */}
-      {promptHistory.length > 0 && (
-        <div className="bg-gray-50 rounded-lg p-4">
+      <form onSubmit={handleSubmit}>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          className="w-full px-4 py-3 border rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          rows={6}
+          placeholder={moduleId 
+            ? "Es: Aggiungi campo sconto con validazione massima 30%..."
+            : "Es: Gestione ordini con cliente, prodotto, quantità, prezzo e stato..."
+          }
+          disabled={loading}
+        />
+        
+        <div className="flex justify-between items-center mt-4">
+          <span className="text-sm text-gray-500">
+            {prompt.length} caratteri
+          </span>
+          
           <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center justify-between w-full text-sm font-medium text-gray-700 hover:text-gray-900"
+            type="submit"
+            disabled={loading || !prompt.trim()}
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-medium"
           >
-            <span className="flex items-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Cronologia Prompt ({promptHistory.length})
-            </span>
-            <svg
-              className={`w-4 h-4 transition-transform ${showHistory ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          <AnimatePresence>
-            {showHistory && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="mt-3 space-y-2"
-              >
-                {promptHistory.map((item) => (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className="bg-white border border-gray-200 rounded-lg p-3 cursor-pointer hover:border-blue-300 transition-colors"
-                    onClick={() => useHistoryPrompt(item.prompt)}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-gray-500">
-                        Versione {item.version_number}
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {new Date(item.created_at).toLocaleDateString('it-IT')}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-700 line-clamp-2">{item.prompt}</p>
-                  </motion.div>
-                ))}
-              </motion.div>
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span className="animate-spin">⏳</span>
+                {moduleId ? 'Modificando...' : 'Generando...'}
+              </span>
+            ) : (
+              moduleId ? '✏️ Modifica' : '🚀 Genera Modulo'
             )}
-          </AnimatePresence>
+          </button>
+        </div>
+
+        {error && (
+          <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+            {error}
+          </div>
+        )}
+      </form>
+
+      {currentVersion && (
+        <div className="mt-6 pt-6 border-t">
+          <p className="text-xs text-gray-500 mb-2">Versione attuale:</p>
+          <p className="text-sm text-gray-700 bg-gray-50 p-3 rounded">
+            "{currentVersion.prompt}"
+          </p>
         </div>
       )}
-
-      {/* Prompt Input */}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="prompt" className="block text-sm font-medium text-gray-700 mb-2">
-            Modifica Modulo: <span className="font-bold text-blue-600">{moduleName}</span>
-          </label>
-          <textarea
-            id="prompt"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Es: Aggiungi campo 'note' alla tabella ordini, oppure: Collega questo modulo al modulo Clienti usando il campo cliente_id..."
-            className="w-full h-48 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-800 placeholder-gray-400"
-            disabled={isLoading}
-          />
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-xs text-gray-500">{prompt.length} caratteri</span>
-            {!showContext && connectedModules.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShowContext(true)}
-                className="text-xs text-blue-600 hover:text-blue-700"
-              >
-                Mostra moduli collegabili
-              </button>
-            )}
-          </div>
-        </div>
-
-        <motion.button
-          type="submit"
-          disabled={!prompt.trim() || isLoading}
-          whileHover={{ scale: isLoading ? 1 : 1.02 }}
-          whileTap={{ scale: isLoading ? 1 : 0.98 }}
-          className="w-full py-4 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
-        >
-          {isLoading ? (
-            <>
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
-              />
-              <span>Modifica in corso...</span>
-            </>
-          ) : (
-            <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
-              <span>Modifica Modulo</span>
-            </>
-          )}
-        </motion.button>
-      </form>
     </div>
   );
 }
-

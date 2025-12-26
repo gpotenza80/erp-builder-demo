@@ -1,146 +1,121 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
-import ModuleCard from '@/components/ModuleCard';
-
-interface Workspace {
-  id: string;
-  name: string;
-  user_id: string;
-}
-
-interface Module {
-  id: string;
-  name: string;
-  slug: string;
-  type: string | null;
-  status: 'dev' | 'staging' | 'prod' | 'draft';
-  updated_at: string;
-  dev_deploy_url?: string;
-  staging_deploy_url?: string;
-  prod_deploy_url?: string;
-}
+import { motion } from 'framer-motion';
+import type { Workspace, Module } from '@/lib/supabase/schema';
 
 export default function DashboardPage() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [modules, setModules] = useState<Module[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadDashboard();
+    loadWorkspaceAndModules();
   }, []);
 
-  const loadDashboard = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      // Carica workspace (per ora: workspace unico)
-      const workspaceResponse = await fetch('/api/workspaces');
-      const workspaceData = await workspaceResponse.json();
-
-      if (workspaceData.success && workspaceData.workspaces?.length > 0) {
-        setWorkspace(workspaceData.workspaces[0]);
-        
-        // Carica moduli del workspace
-        const modulesResponse = await fetch(`/api/workspaces/${workspaceData.workspaces[0].id}/modules`);
-        const modulesData = await modulesResponse.json();
-
-        if (modulesData.success) {
-          setModules(modulesData.modules || []);
-        }
-      } else {
-        // Se non ci sono workspace, crea uno di default
-        const createResponse = await fetch('/api/workspaces', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: 'default_user',
-            name: 'My Workspace',
-          }),
-        });
-        const createData = await createResponse.json();
-        
-        if (createData.success) {
-          setWorkspace(createData.workspace);
-          setModules([]);
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Errore nel caricamento');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleCreateModule = () => {
-    // TODO: Implementare creazione nuovo modulo
-    window.location.href = '/dashboard?action=create-module';
-  };
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-          className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full"
-        />
-      </div>
+  async function loadWorkspaceAndModules() {
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
+
+    // Carica workspace (per ora: primo workspace trovato)
+    const { data: workspaceData } = await supabase
+      .from('workspaces')
+      .select('*')
+      .limit(1)
+      .single();
+
+    if (!workspaceData) {
+      // Crea workspace di default se non esiste
+      const { data: newWorkspace } = await supabase
+        .from('workspaces')
+        .insert({
+          user_id: 'default_user',
+          name: 'My ERP Workspace',
+          description: 'Il mio workspace ERP personalizzato'
+        })
+        .select()
+        .single();
+      
+      setWorkspace(newWorkspace);
+    } else {
+      setWorkspace(workspaceData);
+    }
+
+    // Carica moduli del workspace
+    if (workspaceData || workspace) {
+      const workspaceId = workspaceData?.id || workspace?.id;
+      const { data: modulesData } = await supabase
+        .from('modules')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .order('created_at', { ascending: false });
+
+      setModules(modulesData || []);
+    }
+
+    setLoading(false);
   }
 
-  if (error) {
+  function getEnvironmentBadge(module: Module) {
+    if (module.prod_version_id) return { label: 'PROD', color: 'bg-green-500' };
+    if (module.staging_version_id) return { label: 'STAGING', color: 'bg-yellow-500' };
+    if (module.dev_version_id) return { label: 'DEV', color: 'bg-blue-500' };
+    return { label: 'DRAFT', color: 'bg-gray-400' };
+  }
+
+  if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white rounded-xl shadow-lg p-6 max-w-md">
-          <div className="text-red-600 mb-4">
-            <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">Errore</h2>
-          <p className="text-gray-600 mb-4">{error}</p>
-          <button
-            onClick={loadDashboard}
-            className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium"
-          >
-            Riprova
-          </button>
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Caricamento workspace...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-800 mb-2">
-                {workspace?.name || 'Dashboard'}
-              </h1>
-              <p className="text-gray-600">
-                Gestisci i tuoi moduli ERP in modo modulare e iterativo
-              </p>
-            </div>
-            <motion.button
-              onClick={handleCreateModule}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl shadow-lg hover:shadow-xl transition-all font-semibold flex items-center gap-2"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Nuovo Modulo
-            </motion.button>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
+      {/* Header */}
+      <div className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              {workspace?.name || 'ERP Builder'}
+            </h1>
+            <p className="text-sm text-gray-600">
+              {workspace?.description || 'Workspace modulare'}
+            </p>
           </div>
+          <Link
+            href="/"
+            className="text-sm text-gray-600 hover:text-gray-900"
+          >
+            ← Torna alla home
+          </Link>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800">I Tuoi Moduli</h2>
+            <p className="text-sm text-gray-600">
+              {modules.length} modulo{modules.length !== 1 ? 'i' : ''} nel workspace
+            </p>
+          </div>
+          <Link
+            href="/workspace/new"
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium flex items-center gap-2"
+          >
+            <span>+</span>
+            Nuovo Modulo
+          </Link>
         </div>
 
         {/* Modules Grid */}
@@ -148,47 +123,26 @@ export default function DashboardPage() {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-xl shadow-lg p-12 text-center"
+            className="bg-white rounded-xl shadow-sm border-2 border-dashed border-gray-300 p-12 text-center"
           >
-            <div className="w-24 h-24 bg-gradient-to-r from-blue-100 to-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6">
-              <svg className="w-12 h-12 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-            </div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">Nessun modulo ancora</h2>
+            <div className="text-6xl mb-4">📦</div>
+            <h3 className="text-xl font-semibold text-gray-800 mb-2">
+              Nessun modulo ancora
+            </h3>
             <p className="text-gray-600 mb-6">
-              Crea il tuo primo modulo per iniziare a costruire il tuo sistema ERP modulare
+              Crea il tuo primo modulo ERP per iniziare
             </p>
-            <motion.button
-              onClick={handleCreateModule}
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl shadow-lg hover:shadow-xl transition-all font-semibold inline-flex items-center gap-2"
+            <Link
+              href="/workspace/new"
+              className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
               Crea Primo Modulo
-            </motion.button>
+            </Link>
           </motion.div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {modules.map((module, index) => {
-              // Determina status e preview URL
-              let status: 'dev' | 'staging' | 'prod' | 'draft' = 'draft';
-              let previewUrl: string | undefined;
-
-              if (module.prod_deploy_url) {
-                status = 'prod';
-                previewUrl = module.prod_deploy_url;
-              } else if (module.staging_deploy_url) {
-                status = 'staging';
-                previewUrl = module.staging_deploy_url;
-              } else if (module.dev_deploy_url) {
-                status = 'dev';
-                previewUrl = module.dev_deploy_url;
-              }
-
+              const badge = getEnvironmentBadge(module);
               return (
                 <motion.div
                   key={module.id}
@@ -196,15 +150,37 @@ export default function DashboardPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.1 }}
                 >
-                  <ModuleCard
-                    id={module.id}
-                    name={module.name}
-                    slug={module.slug}
-                    type={module.type || undefined}
-                    status={status}
-                    lastModified={module.updated_at}
-                    previewUrl={previewUrl}
-                  />
+                  <Link href={`/workspace/${module.id}`}>
+                    <div className="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow border border-gray-200 p-6 cursor-pointer">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="text-4xl">
+                          {module.icon || '📦'}
+                        </div>
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold text-white ${badge.color}`}>
+                          {badge.label}
+                        </span>
+                      </div>
+                      
+                      <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                        {module.name}
+                      </h3>
+                      
+                      {module.description && (
+                        <p className="text-sm text-gray-600 mb-4 line-clamp-2">
+                          {module.description}
+                        </p>
+                      )}
+                      
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <span>
+                          {new Date(module.updated_at).toLocaleDateString('it-IT')}
+                        </span>
+                        <span className="text-blue-600 font-medium">
+                          Apri →
+                        </span>
+                      </div>
+                    </div>
+                  </Link>
                 </motion.div>
               );
             })}
@@ -214,4 +190,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-

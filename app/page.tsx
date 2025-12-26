@@ -48,6 +48,14 @@ export default function Home() {
           <p className="text-lg text-gray-500">
             Niente codice, niente complicazioni. Solo italiano.
           </p>
+          <div className="mt-8 flex gap-4 justify-center">
+            <Link
+              href="/dashboard"
+              className="px-6 py-3 bg-white text-blue-600 border-2 border-blue-600 rounded-lg hover:bg-blue-50 font-medium transition-colors"
+            >
+              Vai al Dashboard →
+            </Link>
+          </div>
         </div>
 
         <div className="max-w-4xl mx-auto space-y-8">

@@ -381,9 +381,47 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { workspaceId, name, prompt, type } = body;
 
-    if (!workspaceId || !name || !prompt) {
+    const supabase = getSupabaseClient();
+
+    // Se workspaceId non è fornito, usa il primo workspace disponibile o creane uno
+    let finalWorkspaceId = workspaceId;
+    if (!finalWorkspaceId) {
+      const { data: existingWorkspace } = await supabase
+        .from('workspaces')
+        .select('id')
+        .limit(1)
+        .single();
+
+      if (existingWorkspace) {
+        finalWorkspaceId = existingWorkspace.id;
+      } else {
+        // Crea workspace di default
+        const { data: newWorkspace } = await supabase
+          .from('workspaces')
+          .insert({
+            user_id: 'default_user',
+            name: 'My ERP Workspace',
+            description: 'Il mio workspace ERP personalizzato'
+          })
+          .select()
+          .single();
+
+        if (!newWorkspace) {
+          return NextResponse.json(
+            { success: false, error: 'Errore creazione workspace' },
+            { status: 500 }
+          );
+        }
+        finalWorkspaceId = newWorkspace.id;
+      }
+    }
+
+    // Se name non è fornito, estrailo dal prompt
+    const finalName = name || prompt.substring(0, 50) || 'Nuovo Modulo';
+
+    if (!prompt) {
       return NextResponse.json(
-        { success: false, error: 'workspaceId, name e prompt richiesti' },
+        { success: false, error: 'prompt richiesto' },
         { status: 400 }
       );
     }
@@ -398,8 +436,8 @@ export async function POST(request: NextRequest) {
     const { data: module, error: moduleError } = await supabase
       .from('modules')
       .insert({
-        workspace_id: workspaceId,
-        name,
+        workspace_id: finalWorkspaceId,
+        name: finalName,
         slug,
         type: type || null,
         description: prompt.substring(0, 200),
