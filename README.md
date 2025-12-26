@@ -88,7 +88,25 @@ Apri [http://localhost:3000](http://localhost:3000) nel browser.
 
 ## 🚀 Deploy su Vercel
 
-### 🎯 Deploy Completamente Automatico (Raccomandato)
+### 🎯 Deploy Automatico ad Ogni Commit (Raccomandato)
+
+**Configurazione una volta, deploy automatico per sempre:**
+
+```bash
+npm run setup:auto-deploy
+```
+
+Dopo questa configurazione, **ogni commit triggera automaticamente il deploy**:
+
+1. ✅ Fai modifiche ai file
+2. ✅ Fai commit: `git commit -m "messaggio"`
+3. ✅ **Automaticamente**: push su GitHub → Vercel deploya
+
+**Nessun comando aggiuntivo necessario!** 🚀
+
+---
+
+### 📦 Deploy Manuale (Alternativa)
 
 **Un solo comando per fare tutto:**
 
@@ -102,8 +120,6 @@ Questo script esegue automaticamente:
 3. ✅ Commit e push automatico delle modifiche
 4. ✅ Deploy su Vercel con API (senza interazione)
 5. ✅ Configurazione automatica di tutte le environment variables
-
-**Nessuna interazione richiesta!** 🚀
 
 ---
 
@@ -209,6 +225,7 @@ Segui le istruzioni per configurare le environment variables.
 - `npm run deploy` - Deploy con Vercel CLI (richiede login)
 
 ### Setup
+- `npm run setup:auto-deploy` - **Configura deploy automatico ad ogni commit** (raccomandato)
 - `npm run setup:github` - Setup automatico repository GitHub (prima volta)
 - `npm run setup:all` - Setup GitHub + Deploy Vercel
 

@@ -11,6 +11,7 @@
     "deploy:vercel": "bash scripts/deploy-vercel-api.sh",
     "deploy:auto": "bash scripts/deploy-full-auto.sh",
     "setup:github": "bash scripts/setup-github.sh",
+    "setup:auto-deploy": "bash scripts/setup-auto-deploy.sh",
     "setup:all": "npm run setup:github && npm run deploy:vercel"
   },
   "dependencies": {
