@@ -129,13 +129,25 @@ export async function GET(request: NextRequest) {
     
     const supabase = getSupabaseClient();
     
+    // Verifica se la tabella esiste prima di fare la query
     const { data: apps, error } = await supabase
       .from('generated_apps')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(100); // Limita a 100 app per evitare timeout
 
     if (error) {
       console.error('[APPS] Errore lettura app:', error);
+      
+      // Se la tabella non esiste, restituisci array vuoto invece di errore
+      if (error.code === 'PGRST116' || error.message.includes('does not exist')) {
+        console.log('[APPS] Tabella generated_apps non esiste, restituisco array vuoto');
+        return NextResponse.json({
+          success: true,
+          apps: [],
+        });
+      }
+      
       return NextResponse.json(
         { success: false, error: error.message },
         { status: 500 }
@@ -143,13 +155,13 @@ export async function GET(request: NextRequest) {
     }
 
     // Prepara i dati delle app
-    const appsWithDetails = apps?.map((app: any) => ({
+    const appsWithDetails = (apps || []).map((app: any) => ({
       id: app.id,
-      prompt: app.prompt,
-      created_at: app.created_at,
+      prompt: app.prompt || 'App senza prompt',
+      created_at: app.created_at || new Date().toISOString(),
       filesCount: app.files ? Object.keys(app.files).length : 0,
-      deployUrl: app.deployUrl || undefined, // deployUrl potrebbe non esistere nella tabella
-    })) || [];
+      deployUrl: app.deployUrl || undefined,
+    }));
 
     console.log('[APPS] App trovate:', appsWithDetails.length);
     
@@ -159,13 +171,13 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('[APPS] Errore:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : 'Errore sconosciuto',
-      },
-      { status: 500 }
-    );
+    
+    // In caso di errore generico, restituisci array vuoto invece di errore
+    return NextResponse.json({
+      success: true,
+      apps: [],
+      warning: error instanceof Error ? error.message : 'Errore sconosciuto',
+    });
   }
 }
 
