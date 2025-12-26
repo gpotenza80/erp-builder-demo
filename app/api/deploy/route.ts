@@ -344,7 +344,7 @@ export async function POST(request: NextRequest) {
       const { data: blobData } = await octokit.git.createBlob({
         owner: repo.owner.login,
         repo: repo.name,
-        content: Buffer.from(content).toString('base64'),
+        content: Buffer.from(content as string).toString('base64'),
         encoding: 'base64',
       });
       blobShas[path] = blobData.sha;
@@ -398,8 +398,7 @@ export async function POST(request: NextRequest) {
     console.log('[DEPLOY] Repo URL:', repoUrl);
     console.log('[DEPLOY] Deploy URL:', deployUrl);
 
-    // Salva deployUrl nel database
-    const supabase = getSupabaseClient();
+    // Salva deployUrl nel database (riutilizza supabase già dichiarato sopra)
     try {
       const { error: updateError } = await supabase
         .from('generated_apps')

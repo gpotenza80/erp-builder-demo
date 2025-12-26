@@ -101,7 +101,7 @@ async function getAllVercelProjects(): Promise<string[]> {
     let next: number | null = null;
 
     do {
-      const url = next 
+      const url: string = next 
         ? `https://api.vercel.com/v9/projects?limit=100&until=${next}`
         : 'https://api.vercel.com/v9/projects?limit=100';
 

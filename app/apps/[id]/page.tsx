@@ -511,11 +511,11 @@ export default function AppDetailPage() {
                     </div>
                   </div>
                 )}
-                {/* Overlay di loading (non più necessario ma lo teniamo per sicurezza) */}
+                {/* Overlay di loading (non più necessario ma lo teniamo per sicurezza) - DISABILITATO */}
                 {false && (
                   <motion.div
                     initial={{ opacity: 1 }}
-                    animate={{ opacity: isBuildComplete ? 0 : 1 }}
+                    animate={{ opacity: buildStatus === 'live' ? 0 : 1 }}
                     exit={{ opacity: 0 }}
                     className="absolute inset-0 bg-white/95 backdrop-blur-sm flex items-center justify-center z-10"
                   >
@@ -550,7 +550,6 @@ export default function AppDetailPage() {
                             if (iframe) {
                               iframe.src = iframe.src; // Force reload
                             }
-                            setIsBuildComplete(true);
                             setBuildStatus('live');
                           }}
                           whileHover={{ scale: 1.05 }}
@@ -568,9 +567,9 @@ export default function AppDetailPage() {
                         >
                           🔁 Riprova Deploy
                         </motion.button>
-                        {app.deployUrl && (
+                        {app?.deployUrl && (
                           <motion.a
-                            href={app.deployUrl}
+                            href={app?.deployUrl || '#'}
                             target="_blank"
                             rel="noopener noreferrer"
                             whileHover={{ scale: 1.05 }}

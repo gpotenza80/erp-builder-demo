@@ -29,9 +29,9 @@ function getSupabaseClient() {
 }
 
 // Crea la tabella se non esiste
-async function ensureTableExists(supabase: ReturnType<typeof createClient>) {
+async function ensureTableExists(supabase: any) {
   // Prova a creare la tabella con tutte le colonne necessarie (ignora se esiste già)
-  const { error: createError } = await supabase.rpc('exec_sql', {
+  const { error: createError } = await (supabase as any).rpc('exec_sql', {
     sql: `
       CREATE TABLE IF NOT EXISTS generated_apps (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -47,7 +47,7 @@ async function ensureTableExists(supabase: ReturnType<typeof createClient>) {
 
   // Aggiungi colonne deployUrl e repoUrl se non esistono (per tabelle create prima)
   // Questo funziona solo se la funzione RPC exec_sql è disponibile
-  const { error: alterError1 } = await supabase.rpc('exec_sql', {
+  const { error: alterError1 } = await (supabase as any).rpc('exec_sql', {
     sql: `
       DO $$ 
       BEGIN
@@ -61,7 +61,7 @@ async function ensureTableExists(supabase: ReturnType<typeof createClient>) {
     `
   });
 
-  const { error: alterError2 } = await supabase.rpc('exec_sql', {
+  const { error: alterError2 } = await (supabase as any).rpc('exec_sql', {
     sql: `
       DO $$ 
       BEGIN
