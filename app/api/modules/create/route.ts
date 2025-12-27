@@ -173,7 +173,9 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
     try {
       const githubResult = await createAndPushGitHubRepo(module.id, files, finalName);
       repoUrl = githubResult.repoUrl;
-      const repoName = `erp-module-${module.id.substring(0, 8)}`;
+      // Estrai il nome del repository dall'URL (es: https://github.com/user/repo -> repo)
+      const repoNameFromUrl = repoUrl.split('/').pop()?.replace('.git', '') || `erp-app-${module.id.substring(0, 8)}`;
+      const repoName = repoNameFromUrl;
       
       try {
         // Deploy con auto-fix abilitato
@@ -191,12 +193,26 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
             const { data: userData } = await octokit.users.getAuthenticated();
             const username = userData.login;
             
-            // Ottieni branch SHA
-            const { data: refData } = await octokit.git.getRef({
-              owner: username,
-              repo: repoName,
-              ref: 'heads/main',
-            });
+            // Ottieni branch SHA (prova prima main, poi master)
+            let refData;
+            try {
+              refData = (await octokit.git.getRef({
+                owner: username,
+                repo: repoName,
+                ref: 'heads/main',
+              })).data;
+            } catch (error: any) {
+              if (error.status === 404) {
+                // Prova con master
+                refData = (await octokit.git.getRef({
+                  owner: username,
+                  repo: repoName,
+                  ref: 'heads/master',
+                })).data;
+              } else {
+                throw error;
+              }
+            }
 
             const { data: commitData } = await octokit.git.getCommit({
               owner: username,
@@ -241,11 +257,12 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
               parents: [refData.object.sha],
             });
 
-            // Aggiorna reference
+            // Aggiorna reference (usa lo stesso branch trovato prima)
+            const branchName = refData.ref.replace('refs/heads/', '');
             await octokit.git.updateRef({
               owner: username,
               repo: repoName,
-              ref: 'heads/main',
+              ref: `heads/${branchName}`,
               sha: commitResponse.sha,
             });
 
