@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 import { parseClaudeResponse, validateAndFixCode, getBaseFiles } from '@/lib/code-generation';
-import { createAndPushGitHubRepo, createVercelDeployment } from '@/lib/github-deploy';
+import { createAndPushGitHubRepo, createVercelDeployment, getGitHubClient } from '@/lib/github-deploy';
 
 function getSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -140,6 +140,7 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
     let deployUrl: string | undefined;
     let deployError: string | undefined;
     let deployStatus: 'deployed_dev' | 'failed' = 'deployed_dev';
+    let autoFixApplied = false;
 
     try {
       const githubResult = await createAndPushGitHubRepo(module.id, files, finalName);
@@ -147,7 +148,98 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
       const repoName = `erp-module-${module.id.substring(0, 8)}`;
       
       try {
-        deployUrl = await createVercelDeployment(repoName, repoUrl, module.id);
+        // Deploy con auto-fix abilitato
+        deployUrl = await createVercelDeployment(repoName, repoUrl, module.id, {
+          enableAutoFix: true,
+          currentFiles: files,
+          originalPrompt: prompt,
+          anthropic: anthropic,
+          onAutoFix: async (fixedFiles: Record<string, string>) => {
+            console.log('[CREATE] [AUTO-FIX] Applicazione fix su GitHub...');
+            autoFixApplied = true;
+            
+            // Push fix su GitHub
+            const octokit = getGitHubClient();
+            const { data: userData } = await octokit.users.getAuthenticated();
+            const username = userData.login;
+            
+            // Ottieni branch SHA
+            const { data: refData } = await octokit.git.getRef({
+              owner: username,
+              repo: repoName,
+              ref: 'heads/main',
+            });
+
+            const { data: commitData } = await octokit.git.getCommit({
+              owner: username,
+              repo: repoName,
+              commit_sha: refData.object.sha,
+            });
+
+            // Crea blobs per i file fixati
+            const baseFiles = getBaseFiles();
+            const allFixedFiles = { ...baseFiles, ...fixedFiles };
+            const blobShas: Record<string, string> = {};
+            
+            for (const [path, content] of Object.entries(allFixedFiles)) {
+              const { data: blobData } = await octokit.git.createBlob({
+                owner: username,
+                repo: repoName,
+                content: Buffer.from(content).toString('base64'),
+                encoding: 'base64',
+              });
+              blobShas[path] = blobData.sha;
+            }
+
+            // Crea tree
+            const { data: treeData } = await octokit.git.createTree({
+              owner: username,
+              repo: repoName,
+              base_tree: commitData.tree.sha,
+              tree: Object.entries(allFixedFiles).map(([path]) => ({
+                path,
+                mode: '100644' as const,
+                type: 'blob' as const,
+                sha: blobShas[path],
+              })),
+            });
+
+            // Crea commit
+            const { data: commitResponse } = await octokit.git.createCommit({
+              owner: username,
+              repo: repoName,
+              message: 'Auto-fix: correzione errori di build',
+              tree: treeData.sha,
+              parents: [refData.object.sha],
+            });
+
+            // Aggiorna reference
+            await octokit.git.updateRef({
+              owner: username,
+              repo: repoName,
+              ref: 'heads/main',
+              sha: commitResponse.sha,
+            });
+
+            console.log('[CREATE] [AUTO-FIX] ✅ Fix pushato su GitHub, Vercel auto-deployerà...');
+            
+            // Aggiorna files nel database (aggiorna l'ultima versione)
+            const { data: latestVersion } = await supabase
+              .from('module_versions')
+              .select('id')
+              .eq('module_id', module.id)
+              .order('version_number', { ascending: false })
+              .limit(1)
+              .single();
+            
+            if (latestVersion) {
+              await supabase
+                .from('module_versions')
+                .update({ files: fixedFiles })
+                .eq('id', latestVersion.id);
+            }
+          },
+        });
         console.log('[CREATE] ✅ Deployment Vercel completato:', deployUrl);
       } catch (vercelError) {
         console.error('[CREATE] ⚠️  Errore deployment Vercel:', vercelError);
@@ -212,7 +304,13 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
       devUrl: deployUrl || undefined,
       repoUrl: repoUrl || undefined,
       deployStatus: deployStatus,
-      ...(deployError && { deployError, warning: 'Deployment Vercel fallito, ma modulo creato con successo. Puoi riprovare il deploy in seguito.' }),
+      autoFixApplied: autoFixApplied,
+      ...(deployError && { 
+        deployError, 
+        warning: autoFixApplied 
+          ? 'Deployment fallito, ma auto-fix applicato. Vercel sta deployando la versione corretta...'
+          : 'Deployment Vercel fallito, ma modulo creato con successo. Puoi riprovare il deploy in seguito.' 
+      }),
     });
   } catch (error) {
     console.error('[CREATE] Errore:', error);

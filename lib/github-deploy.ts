@@ -249,10 +249,18 @@ export async function createAndPushGitHubRepo(
 }
 
 // Crea progetto su Vercel usando l'API v9 e attende il deployment automatico
+// Con supporto per auto-fix in caso di errori di build
 export async function createVercelDeployment(
   repoName: string,
   repoUrl: string,
-  appId: string
+  appId: string,
+  options?: {
+    enableAutoFix?: boolean;
+    currentFiles?: Record<string, string>;
+    originalPrompt?: string;
+    anthropic?: any;
+    onAutoFix?: (fixedFiles: Record<string, string>) => Promise<void>;
+  }
 ): Promise<string> {
   console.log('[VERCEL] Inizio creazione progetto Vercel...');
   
@@ -500,6 +508,56 @@ export async function createVercelDeployment(
             if (logsUrl) {
               console.error('[VERCEL] Logs disponibili su:', logsUrl);
             }
+
+            // AUTO-FIX: Se abilitato, prova a fixare automaticamente
+            if (options?.enableAutoFix && options?.currentFiles && options?.originalPrompt && options?.anthropic) {
+              console.log('[VERCEL] [AUTO-FIX] Tentativo auto-fix...');
+              
+              try {
+                const { getVercelBuildLogs, autoFixBuildErrors } = await import('./vercel-auto-fix');
+                
+                // Recupera log di build
+                const vercelToken = process.env.VERCEL_TOKEN;
+                if (vercelToken) {
+                  const { logs, errorSummary } = await getVercelBuildLogs(deploymentId, vercelToken);
+                  
+                  console.log('[VERCEL] [AUTO-FIX] Log recuperati, generazione fix...');
+                  
+                  // Genera fix automatico
+                  const fixResult = await autoFixBuildErrors(
+                    logs,
+                    errorSummary,
+                    options.currentFiles,
+                    options.originalPrompt,
+                    options.anthropic,
+                    1
+                  );
+
+                  if (fixResult.success) {
+                    console.log('[VERCEL] [AUTO-FIX] ✅ Fix generato!', fixResult.explanation);
+                    
+                    // Callback per applicare il fix (es: push su GitHub e riprova deployment)
+                    if (options.onAutoFix) {
+                      await options.onAutoFix(fixResult.fixedFiles);
+                      
+                      // Riprova deployment (il callback dovrebbe aver pushato il fix su GitHub)
+                      // Vercel auto-deployerà automaticamente dal nuovo commit
+                      console.log('[VERCEL] [AUTO-FIX] Fix applicato, attendo nuovo deployment...');
+                      
+                      // Reset polling per il nuovo deployment
+                      pollingAttempt = 0;
+                      await new Promise(resolve => setTimeout(resolve, 30000)); // Attendi 30s per il nuovo deployment
+                      continue; // Continua il polling per il nuovo deployment
+                    }
+                  } else {
+                    console.warn('[VERCEL] [AUTO-FIX] ⚠️  Auto-fix fallito:', fixResult.explanation);
+                  }
+                }
+              } catch (autoFixError) {
+                console.error('[VERCEL] [AUTO-FIX] Errore durante auto-fix:', autoFixError);
+                // Continua con l'errore normale
+              }
+            }
             
             // Crea errore dettagliato
             let detailedError = `Deployment Vercel fallito: ${errorMessage}`;
@@ -511,7 +569,7 @@ export async function createVercelDeployment(
             }
             
             deploymentError = new Error(detailedError);
-            // Ferma immediatamente il polling quando rileva ERROR
+            // Ferma immediatamente il polling quando rileva ERROR (se auto-fix non ha funzionato)
             break;
           }
 
