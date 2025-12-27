@@ -544,10 +544,60 @@ export async function createVercelDeployment(
                       // Vercel auto-deployerà automaticamente dal nuovo commit
                       console.log('[VERCEL] [AUTO-FIX] Fix applicato, attendo nuovo deployment...');
                       
-                      // Reset polling per il nuovo deployment
+                      // Attendi che Vercel rilevi il nuovo commit e crei un nuovo deployment
+                      await new Promise(resolve => setTimeout(resolve, 30000)); // Attendi 30s
+                      
+                      // Prova a ottenere il nuovo deployment dal progetto
+                      // Vercel dovrebbe aver creato automaticamente un nuovo deployment
+                      try {
+                        // Ottieni projectId dal nome del progetto
+                        const projectResponse = await fetch(
+                          `https://api.vercel.com/v9/projects/${repoName}`,
+                          {
+                            headers: {
+                              'Authorization': `Bearer ${vercelToken}`,
+                            },
+                          }
+                        );
+
+                        if (projectResponse.ok) {
+                          const projectData = await projectResponse.json();
+                          const projectId = projectData.id;
+
+                          // Prova a ottenere l'ultimo deployment del progetto
+                          const deploymentsResponse = await fetch(
+                            `https://api.vercel.com/v6/deployments?projectId=${projectId}&limit=1`,
+                            {
+                              headers: {
+                                'Authorization': `Bearer ${vercelToken}`,
+                              },
+                            }
+                          );
+
+                          if (deploymentsResponse.ok) {
+                            const deployments = await deploymentsResponse.json();
+                            if (deployments.deployments && deployments.deployments.length > 0) {
+                              const newDeploymentId = deployments.deployments[0].uid;
+                              if (newDeploymentId !== deploymentId) {
+                                console.log('[VERCEL] [AUTO-FIX] Nuovo deployment rilevato:', newDeploymentId);
+                                deploymentId = newDeploymentId;
+                                pollingAttempt = 0; // Reset polling per il nuovo deployment
+                                continue; // Continua il polling per il nuovo deployment
+                              } else {
+                                console.log('[VERCEL] [AUTO-FIX] Stesso deployment, potrebbe essere ancora in corso...');
+                              }
+                            }
+                          }
+                        }
+                      } catch (e) {
+                        console.warn('[VERCEL] [AUTO-FIX] Impossibile ottenere nuovo deployment:', e);
+                      }
+                      
+                      // Se non riusciamo a ottenere il nuovo deployment, continua il polling sul vecchio
+                      // (potrebbe essere che Vercel stia ancora processando)
+                      console.log('[VERCEL] [AUTO-FIX] Continuo polling sul deployment esistente...');
                       pollingAttempt = 0;
-                      await new Promise(resolve => setTimeout(resolve, 30000)); // Attendi 30s per il nuovo deployment
-                      continue; // Continua il polling per il nuovo deployment
+                      continue;
                     }
                   } else {
                     console.warn('[VERCEL] [AUTO-FIX] ⚠️  Auto-fix fallito:', fixResult.explanation);
