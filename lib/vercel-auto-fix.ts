@@ -67,52 +67,60 @@ export async function getVercelBuildLogs(
     const logLines: string[] = [];
     let errorSummary = '';
 
-    if (Array.isArray(events)) {
+    if (Array.isArray(events) && events.length > 0) {
       for (const event of events) {
         if (event.type === 'command' && event.payload?.text) {
-          logLines.push(event.payload.text);
+          logLines.push(`[CMD] ${event.payload.text}`);
         }
         if (event.type === 'stdout' && event.payload?.text) {
           logLines.push(event.payload.text);
         }
         if (event.type === 'stderr' && event.payload?.text) {
-          logLines.push(`[ERROR] ${event.payload.text}`);
+          const errorText = event.payload.text;
+          logLines.push(`[ERROR] ${errorText}`);
           if (!errorSummary) {
-            errorSummary = event.payload.text.substring(0, 200);
+            errorSummary = errorText.substring(0, 200);
           }
         }
-        if (event.type === 'exit' && event.payload?.code !== 0) {
-          logLines.push(`[EXIT CODE] ${event.payload.code}`);
+        if (event.type === 'exit' && event.payload?.code !== undefined) {
+          logLines.push(`[EXIT] Code: ${event.payload.code}`);
+          if (event.payload.code !== 0 && !errorSummary) {
+            errorSummary = `Exit code: ${event.payload.code}`;
+          }
+        }
+        if (event.type === 'build' && event.payload) {
+          logLines.push(`[BUILD] ${JSON.stringify(event.payload)}`);
         }
       }
+    }
+
+    // Aggiungi informazioni dal deployment status
+    const errorMessage = deploymentData.errorMessage || 
+                        deploymentData.error?.message || 
+                        null;
+    const buildError = deploymentData.build?.error || null;
+    const inspectorUrl = deploymentData.inspectorUrl || null;
+
+    if (errorMessage) {
+      logLines.push(`[DEPLOYMENT ERROR] ${errorMessage}`);
+      if (!errorSummary) {
+        errorSummary = errorMessage;
+      }
+    }
+
+    if (buildError) {
+      const buildErrorStr = typeof buildError === 'string' ? buildError : JSON.stringify(buildError);
+      logLines.push(`[BUILD ERROR] ${buildErrorStr}`);
+      if (!errorSummary) {
+        errorSummary = buildErrorStr.substring(0, 200);
+      }
+    }
+
+    if (inspectorUrl) {
+      logLines.push(`[INSPECTOR URL] ${inspectorUrl}`);
     }
 
     const logs = logLines.join('\n');
-    
-    // Se non ci sono log, prova a estrarre errori dal deployment status
-    if (!logs || logs.trim().length === 0) {
-      const deploymentResponse = await fetch(
-        `https://api.vercel.com/v13/deployments/${deploymentId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${vercelToken}`,
-          },
-        }
-      );
-
-      if (deploymentResponse.ok) {
-        const deploymentData = await deploymentResponse.json();
-        const errorMessage = deploymentData.errorMessage || 
-                            deploymentData.error?.message || 
-                            'Errore sconosciuto';
-        const buildError = deploymentData.build?.error || '';
-        
-        return {
-          logs: `Error: ${errorMessage}\n${buildError ? `Build Error: ${JSON.stringify(buildError)}` : ''}`,
-          errorSummary: errorMessage,
-        };
-      }
-    }
 
     // Estrai errori comuni dai log
     if (!errorSummary) {
@@ -391,4 +399,6 @@ OUTPUT FORMAT:
     };
   }
 }
+
+
 
