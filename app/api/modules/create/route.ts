@@ -136,23 +136,55 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
 
     // Deploy
     console.log('[CREATE] Deploy su GitHub e Vercel...');
-    const { repoUrl } = await createAndPushGitHubRepo(module.id, files, finalName);
-    const repoName = `erp-module-${module.id.substring(0, 8)}`;
-    const deployUrl = await createVercelDeployment(repoName, repoUrl, module.id);
+    let repoUrl: string | undefined;
+    let deployUrl: string | undefined;
+    let deployError: string | undefined;
+    let deployStatus: 'deployed_dev' | 'failed' = 'deployed_dev';
+
+    try {
+      const githubResult = await createAndPushGitHubRepo(module.id, files, finalName);
+      repoUrl = githubResult.repoUrl;
+      const repoName = `erp-module-${module.id.substring(0, 8)}`;
+      
+      try {
+        deployUrl = await createVercelDeployment(repoName, repoUrl, module.id);
+        console.log('[CREATE] ✅ Deployment Vercel completato:', deployUrl);
+      } catch (vercelError) {
+        console.error('[CREATE] ⚠️  Errore deployment Vercel:', vercelError);
+        deployError = vercelError instanceof Error ? vercelError.message : 'Errore sconosciuto durante deployment Vercel';
+        deployStatus = 'failed';
+        // Continua comunque - il modulo è creato e il repo GitHub è pushato
+        // L'utente può riprovare il deploy in seguito
+      }
+    } catch (error) {
+      console.error('[CREATE] ⚠️  Errore durante deploy:', error);
+      deployError = error instanceof Error ? error.message : 'Errore sconosciuto durante deploy';
+      deployStatus = 'failed';
+      // Continua comunque - il modulo è creato anche se il deploy fallisce
+    }
 
     // Crea versione v1
+    const versionData: any = {
+      module_id: module.id,
+      version_number: 1,
+      prompt,
+      files,
+      github_repo_url: repoUrl,
+      status: deployStatus,
+      created_by: 'Creazione nuovo modulo',
+    };
+
+    if (deployUrl) {
+      versionData.dev_deploy_url = deployUrl;
+    }
+
+    if (deployError) {
+      versionData.build_log = `Deployment error: ${deployError}`;
+    }
+
     const { data: version, error: versionError } = await supabase
       .from('module_versions')
-      .insert({
-        module_id: module.id,
-        version_number: 1,
-        prompt,
-        files,
-        dev_deploy_url: deployUrl,
-        github_repo_url: repoUrl,
-        status: 'deployed_dev',
-        created_by: 'Creazione nuovo modulo',
-      })
+      .insert(versionData)
       .select()
       .single();
 
@@ -177,7 +209,10 @@ Restituisci SOLO codice, separato da === FILENAME: path/file.tsx ===`;
       success: true,
       moduleId: module.id,
       versionId: version.id,
-      devUrl: deployUrl,
+      devUrl: deployUrl || undefined,
+      repoUrl: repoUrl || undefined,
+      deployStatus: deployStatus,
+      ...(deployError && { deployError, warning: 'Deployment Vercel fallito, ma modulo creato con successo. Puoi riprovare il deploy in seguito.' }),
     });
   } catch (error) {
     console.error('[CREATE] Errore:', error);

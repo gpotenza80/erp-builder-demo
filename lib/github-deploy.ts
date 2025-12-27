@@ -441,6 +441,7 @@ export async function createVercelDeployment(
       console.log('[VERCEL] [STEP 4] Polling stato deployment...');
       
       let deploymentUrl: string | null = null;
+      let deploymentError: Error | null = null;
       const maxPollingAttempts = 30; // 30 tentativi * 10 secondi = 5 minuti max
       const pollingInterval = 10000; // 10 secondi
 
@@ -457,7 +458,12 @@ export async function createVercelDeployment(
 
           if (!deploymentStatusResponse.ok) {
             console.warn(`[VERCEL] Errore HTTP ${deploymentStatusResponse.status} durante polling`);
-            // Continua il polling
+            // Continua il polling solo se non è un errore 404 (deployment non trovato)
+            if (deploymentStatusResponse.status === 404 && pollingAttempt > 3) {
+              // Se dopo 3 tentativi il deployment non esiste, probabilmente c'è un problema
+              deploymentError = new Error(`Deployment ${deploymentId} non trovato su Vercel`);
+              break;
+            }
             await new Promise(resolve => setTimeout(resolve, pollingInterval));
             continue;
           }
@@ -478,9 +484,35 @@ export async function createVercelDeployment(
             break;
           }
 
-          if (readyState === 'ERROR') {
+          if (readyState === 'ERROR' || readyState === 'CANCELED') {
+            // Estrai informazioni utili dall'errore
+            const errorMessage = deploymentStatus.errorMessage || 
+                                deploymentStatus.error?.message || 
+                                'Deployment fallito su Vercel';
+            const buildError = deploymentStatus.build?.error || null;
+            const logsUrl = deploymentStatus.inspectorUrl || null;
+            
             console.error('[VERCEL] ❌ Deployment fallito!');
-            throw new Error('Deployment fallito su Vercel');
+            console.error('[VERCEL] Error message:', errorMessage);
+            if (buildError) {
+              console.error('[VERCEL] Build error:', buildError);
+            }
+            if (logsUrl) {
+              console.error('[VERCEL] Logs disponibili su:', logsUrl);
+            }
+            
+            // Crea errore dettagliato
+            let detailedError = `Deployment Vercel fallito: ${errorMessage}`;
+            if (buildError) {
+              detailedError += `\nBuild error: ${JSON.stringify(buildError)}`;
+            }
+            if (logsUrl) {
+              detailedError += `\nLogs: ${logsUrl}`;
+            }
+            
+            deploymentError = new Error(detailedError);
+            // Ferma immediatamente il polling quando rileva ERROR
+            break;
           }
 
           // Attendi prima del prossimo polling
@@ -488,18 +520,30 @@ export async function createVercelDeployment(
             await new Promise(resolve => setTimeout(resolve, pollingInterval));
           }
         } catch (error) {
+          // Se è un errore di deployment fallito, non continuare
+          if (error instanceof Error && error.message.includes('Deployment fallito')) {
+            deploymentError = error;
+            break;
+          }
+          
           console.error(`[VERCEL] Errore durante polling (tentativo ${pollingAttempt}):`, error);
-          // Continua il polling se non è un errore fatale
+          // Continua il polling solo per errori di rete/temporanei
           if (pollingAttempt < maxPollingAttempts) {
             await new Promise(resolve => setTimeout(resolve, pollingInterval));
           }
         }
       }
 
+      // Se c'è un errore di deployment, lancialo invece di restituire un URL generico
+      if (deploymentError) {
+        throw deploymentError;
+      }
+
       if (!deploymentUrl) {
-        // Fallback: usa il nome del progetto
+        // Fallback: usa il nome del progetto (solo se non c'è stato un errore)
         deploymentUrl = `https://${repoName}.vercel.app`;
         console.warn('[VERCEL] ⚠️  Deployment URL non ottenuto dal polling, usando URL generico:', deploymentUrl);
+        console.warn('[VERCEL] ⚠️  Il deployment potrebbe essere ancora in corso o potrebbe essere fallito');
       }
 
       return deploymentUrl;
