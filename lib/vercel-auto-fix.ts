@@ -22,35 +22,46 @@ export async function getVercelBuildLogs(
       }
     );
 
-    if (!eventsResponse.ok) {
-      console.warn('[AUTO-FIX] Impossibile recuperare eventi, provo con inspectorUrl...');
-      // Fallback: prova a ottenere informazioni dal deployment status
-      const deploymentResponse = await fetch(
-        `https://api.vercel.com/v13/deployments/${deploymentId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${vercelToken}`,
-          },
+    let events: any[] = [];
+
+    if (eventsResponse.ok) {
+      const eventsData = await eventsResponse.json();
+      
+      // Gli eventi possono essere un array o un oggetto con una proprietà
+      if (Array.isArray(eventsData)) {
+        events = eventsData;
+      } else if (eventsData.events) {
+        events = eventsData.events;
+      } else if (eventsData.data) {
+        events = eventsData.data;
+      } else if (typeof eventsData === 'object') {
+        // Prova a estrarre eventi da qualsiasi proprietà
+        for (const key in eventsData) {
+          if (Array.isArray(eventsData[key])) {
+            events = eventsData[key];
+            break;
+          }
         }
-      );
-
-      if (deploymentResponse.ok) {
-        const deploymentData = await deploymentResponse.json();
-        const errorMessage = deploymentData.errorMessage || 
-                            deploymentData.error?.message || 
-                            'Errore sconosciuto';
-        const buildError = deploymentData.build?.error || '';
-        
-        return {
-          logs: `Error: ${errorMessage}\n${buildError ? `Build Error: ${JSON.stringify(buildError)}` : ''}`,
-          errorSummary: errorMessage,
-        };
       }
-
-      throw new Error(`Impossibile recuperare log: ${eventsResponse.status}`);
+    } else {
+      console.warn(`[AUTO-FIX] Impossibile recuperare eventi (${eventsResponse.status}), provo con deployment status...`);
     }
 
-    const events = await eventsResponse.json();
+    // Fallback: prova a ottenere informazioni dal deployment status
+    const deploymentResponse = await fetch(
+      `https://api.vercel.com/v13/deployments/${deploymentId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${vercelToken}`,
+        },
+      }
+    );
+
+    if (!deploymentResponse.ok) {
+      throw new Error(`Impossibile recuperare deployment: ${deploymentResponse.status}`);
+    }
+
+    const deploymentData = await deploymentResponse.json();
     
     // Estrai log dagli eventi
     const logLines: string[] = [];
