@@ -570,6 +570,140 @@ export async function createVercelDeployment(
         break;
       }
 
+      // Se c'è un errore e auto-fix è abilitato, prova a fixare
+      if (deploymentError || (options?.enableAutoFix && Object.keys(currentFiles).length > 0)) {
+        // Reset deploymentError per permettere al loop di continuare
+        const hadError = !!deploymentError;
+        deploymentError = null;
+
+        if (options?.enableAutoFix && currentFiles && options?.originalPrompt && options?.anthropic) {
+          console.log(`[VERCEL] [AUTO-FIX LOOP] Tentativo ${autoFixAttempt + 1}/${maxAutoFixAttempts}...`);
+          
+          try {
+            const { getVercelBuildLogs, autoFixBuildErrors } = await import('./vercel-auto-fix');
+            
+            // Recupera log di build
+            const vercelToken = process.env.VERCEL_TOKEN;
+            if (vercelToken) {
+              const { logs, errorSummary } = await getVercelBuildLogs(currentDeploymentId, vercelToken);
+              
+              console.log('[VERCEL] [AUTO-FIX LOOP] Log recuperati, generazione fix...');
+              console.log('[VERCEL] [AUTO-FIX LOOP] Error summary:', errorSummary.substring(0, 200));
+              
+              // Genera fix automatico
+              const fixResult = await autoFixBuildErrors(
+                logs,
+                errorSummary,
+                currentFiles,
+                options.originalPrompt,
+                options.anthropic,
+                autoFixAttempt + 1
+              );
+
+              if (fixResult.success) {
+                console.log(`[VERCEL] [AUTO-FIX LOOP] ✅ Fix ${autoFixAttempt + 1} generato!`, fixResult.explanation);
+                
+                // Callback per applicare il fix (es: push su GitHub)
+                if (options.onAutoFix) {
+                  await options.onAutoFix(fixResult.fixedFiles);
+                  
+                  // Aggiorna currentFiles per il prossimo tentativo
+                  currentFiles = fixResult.fixedFiles;
+                  
+                  // Attendi che Vercel rilevi il nuovo commit e crei un nuovo deployment
+                  console.log('[VERCEL] [AUTO-FIX LOOP] Fix applicato, attendo nuovo deployment (30s)...');
+                  await new Promise(resolve => setTimeout(resolve, 30000));
+                  
+                  // Prova a ottenere il nuovo deployment dal progetto
+                  try {
+                    const projectResponse = await fetch(
+                      `https://api.vercel.com/v9/projects/${repoName}`,
+                      {
+                        headers: {
+                          'Authorization': `Bearer ${vercelToken}`,
+                        },
+                      }
+                    );
+
+                    if (projectResponse.ok) {
+                      const projectData = await projectResponse.json();
+                      const projectId = projectData.id;
+
+                      // Prova a ottenere l'ultimo deployment del progetto
+                      const deploymentsResponse = await fetch(
+                        `https://api.vercel.com/v6/deployments?projectId=${projectId}&limit=1`,
+                        {
+                          headers: {
+                            'Authorization': `Bearer ${vercelToken}`,
+                          },
+                        }
+                      );
+
+                      if (deploymentsResponse.ok) {
+                        const deployments = await deploymentsResponse.json();
+                        if (deployments.deployments && deployments.deployments.length > 0) {
+                          const newDeploymentId = deployments.deployments[0].uid;
+                          if (newDeploymentId !== currentDeploymentId) {
+                            console.log('[VERCEL] [AUTO-FIX LOOP] Nuovo deployment rilevato:', newDeploymentId);
+                            currentDeploymentId = newDeploymentId;
+                            autoFixAttempt++;
+                            // Continua il while loop per il nuovo deployment
+                            continue;
+                          } else {
+                            console.log('[VERCEL] [AUTO-FIX LOOP] Stesso deployment, attendo ancora...');
+                            await new Promise(resolve => setTimeout(resolve, 20000)); // Attendi altri 20s
+                            // Riprova a ottenere il deployment
+                            const retryDeployments = await fetch(
+                              `https://api.vercel.com/v6/deployments?projectId=${projectId}&limit=1`,
+                              {
+                                headers: {
+                                  'Authorization': `Bearer ${vercelToken}`,
+                                },
+                              }
+                            );
+                            if (retryDeployments.ok) {
+                              const retryData = await retryDeployments.json();
+                              if (retryData.deployments && retryData.deployments.length > 0) {
+                                const retryDeploymentId = retryData.deployments[0].uid;
+                                if (retryDeploymentId !== currentDeploymentId) {
+                                  console.log('[VERCEL] [AUTO-FIX LOOP] Nuovo deployment rilevato al retry:', retryDeploymentId);
+                                  currentDeploymentId = retryDeploymentId;
+                                  autoFixAttempt++;
+                                  continue;
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    console.warn('[VERCEL] [AUTO-FIX LOOP] Impossibile ottenere nuovo deployment:', e);
+                  }
+                  
+                  // Incrementa tentativo e continua il loop
+                  autoFixAttempt++;
+                  continue; // Continua il while loop per il nuovo deployment
+                }
+              } else {
+                console.warn(`[VERCEL] [AUTO-FIX LOOP] ⚠️  Auto-fix ${autoFixAttempt + 1} fallito:`, fixResult.explanation);
+                autoFixAttempt++;
+                // Continua con il prossimo tentativo
+                continue;
+              }
+            }
+          } catch (autoFixError) {
+            console.error('[VERCEL] [AUTO-FIX LOOP] Errore durante auto-fix:', autoFixError);
+            autoFixAttempt++;
+            // Continua con il prossimo tentativo
+            continue;
+          }
+        } else if (hadError) {
+          // Se c'era un errore ma auto-fix non è abilitato, esci
+          break;
+        }
+      }
+
       // Se non c'è errore ma il deployment non è ancora ready, continua il loop
       if (!deploymentError) {
         console.log(`[VERCEL] [AUTO-FIX LOOP] Continuo con tentativo ${autoFixAttempt + 1}...`);
