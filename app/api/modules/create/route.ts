@@ -66,8 +66,36 @@ export async function POST(request: NextRequest) {
 
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-    // Genera slug
-    const slug = finalName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    // Genera slug unico (gestisce duplicati)
+    let baseSlug = finalName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    let slug = baseSlug;
+    let slugCounter = 1;
+    
+    // Verifica se lo slug esiste già e trova uno disponibile
+    while (true) {
+      const { data: existingModule } = await supabase
+        .from('modules')
+        .select('id')
+        .eq('workspace_id', finalWorkspaceId)
+        .eq('slug', slug)
+        .single();
+      
+      if (!existingModule) {
+        // Slug disponibile, usalo
+        break;
+      }
+      
+      // Slug esiste già, prova con un numero
+      slugCounter++;
+      slug = `${baseSlug}-${slugCounter}`;
+      
+      // Limite di sicurezza per evitare loop infiniti
+      if (slugCounter > 100) {
+        // Usa timestamp come fallback
+        slug = `${baseSlug}-${Date.now()}`;
+        break;
+      }
+    }
 
     // Crea modulo
     const { data: module, error: moduleError } = await supabase

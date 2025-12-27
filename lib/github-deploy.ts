@@ -79,11 +79,17 @@ export async function createAndPushGitHubRepo(
       try {
         repo = await withRetry(
           async () => {
+            // Pulisci la descrizione rimuovendo caratteri di controllo (newline, tab, ecc.)
+            const cleanDescription = (prompt.substring(0, 100) || 'Generated app')
+              .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Rimuovi caratteri di controllo
+              .replace(/\s+/g, ' ') // Sostituisci spazi multipli con uno solo
+              .trim();
+            
             const createRepoResponse = await octokit.repos.createForAuthenticatedUser({
               name: repoName,
               private: true,
               auto_init: true,
-              description: `ERP app generata: ${prompt.substring(0, 100) || 'Generated app'}`,
+              description: `ERP app generata: ${cleanDescription}`,
             });
             return createRepoResponse.data;
           },
